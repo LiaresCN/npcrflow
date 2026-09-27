@@ -20,9 +20,16 @@ The same fields are available through the typed Python configuration classes.
 
 - `pca.method`: `pairwise` retains native missingness; `complete` is the strict
   complete-matrix comparison.
-- `pca.selection`: fixed, Kaiser, explained variance, or blocked validation.
+- `pca.selection`: `fixed`, exact legacy `kaiser`, `kaiser_cv`, explained
+  `variance`, or `blocked_cv`. Exact Kaiser retains every eigenvalue above
+  `kaiser_threshold` (normally 1). `kaiser_cv` uses that count only as the
+  upper bound for contiguous validation; it does not assume every component
+  above one predicts the target. `max_components` is an explicit safety cap.
 - `pca.score_ridge`: stabilizes PC scores when only part of the network exists
   in a year; it does not fill proxy values.
+- The manifest stores the complete fitted eigenvalue spectrum and full-model
+  Kaiser count. Each outer validation row stores its training-only Kaiser count
+  beside the actually selected component count.
 - `reconstruction.interpolation`: only `none` is accepted. Any interpolation
   request is a hard error; native missing years remain `NaN`.
 - `reconstruction.regression`: `auto`, `ols`, `ridge`, `pls`, `elasticnet`, or
@@ -36,7 +43,9 @@ The same fields are available through the typed Python configuration classes.
   `auto_tune` control inner blocked selection. Outer fold scores and spectral
   diagnostics are never reused for this choice. The selected concrete family
   is reported in each validation row and remains fixed during bootstrap and
-  low-frequency-weight tuning.
+  low-frequency-weight tuning. A candidate passes `skill_floor` only when
+  every available inner fold reaches that CE/RE floor; if no candidate passes,
+  the complete table is retained and the fallback is explicit.
 - `n_bootstrap`, `bootstrap_block_years`, and
   `minimum_bootstrap_success_fraction` control moving-block uncertainty. A run
   fails loudly if too few members fit instead of silently reporting a
@@ -60,7 +69,10 @@ The same fields are available through the typed Python configuration classes.
 - `dynamic_variance`: smoothly varies the training-derived scale with the
   error/redundancy-weighted number of available proxies;
 - `auto`: compares the declared amplitude candidates only in inner contiguous
-  folds, penalizing both poor CE/RE and a standard-deviation ratio far from one.
+  folds after the PCR structure is fixed. Robust CE/RE is primary, correlation
+  is the second criterion, and standard-deviation fidelity is only a later
+  tie-breaker. Amplitude can therefore no longer change the selected PC count,
+  regression family, or regularization.
 
 For `variance`, `variance_reference` is either `observation` or
 `max_proxy_nest`. The latter uses the densest proxy-availability tier with at

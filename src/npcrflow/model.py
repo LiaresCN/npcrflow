@@ -199,8 +199,15 @@ def _component_candidates(eigenvalues: np.ndarray, config: PCAConfig) -> list[in
     maximum = min(config.max_components, len(eigenvalues))
     if config.selection == "fixed":
         return [min(int(config.n_components or 1), maximum)]
-    if config.selection == "kaiser":
-        return [max(1, min(int(np.sum(eigenvalues > 1.0)), maximum))]
+    if config.selection in {"kaiser", "kaiser_cv"}:
+        count = max(
+            1,
+            min(int(np.sum(eigenvalues > config.kaiser_threshold)), maximum),
+        )
+        # ``kaiser`` reproduces the legacy eigenvalue-threshold rule exactly.
+        # ``kaiser_cv`` treats it as a physically interpretable upper bound and
+        # lets contiguous validation choose among the retained dimensions.
+        return [count] if config.selection == "kaiser" else list(range(1, count + 1))
     if config.selection == "variance":
         total = eigenvalues.sum()
         if total <= 0:
@@ -456,15 +463,15 @@ def fit_native_pcr(
     amplitude_options = amplitude_candidates()
     if not reconstruction_config.auto_tune:
         amplitude_options = amplitude_options[:1]
-    candidate_grid = [
-        (str(regression_name), int(n_components), float(alpha), amplitude_label, amplitude)
+    structural_grid = [
+        (str(regression_name), int(n_components), float(alpha))
         for regression_name in regression_candidates
         for n_components in component_candidates
         for alpha in alphas_for(str(regression_name))
-        for amplitude_label, amplitude in amplitude_options
     ]
-    if len(candidate_grid) == 1:
-        regression_name, n_components, alpha, _, amplitude = candidate_grid[0]
+    if len(structural_grid) == 1 and len(amplitude_options) == 1:
+        regression_name, n_components, alpha = structural_grid[0]
+        _, amplitude = amplitude_options[0]
         return _fit_candidate(
             matrix,
             target,
@@ -496,102 +503,128 @@ def fit_native_pcr(
         )
         for fold_train, _ in folds
     ]
-    rows: list[dict[str, object]] = []
     regression_order = {
         name: position for position, name in enumerate(regression_candidates)
     }
-    for regression_name in regression_candidates:
-        for n_components in component_candidates:
-            for alpha in alphas_for(str(regression_name)):
-                for amplitude_label, amplitude in amplitude_options:
-                    fold_metrics: list[dict[str, float]] = []
-                    for (fold_train, fold_validation), fold_basis in zip(folds, fold_bases):
-                        try:
-                            model = _fit_candidate(
-                                matrix,
-                                target,
-                                fold_train,
-                                pca_config,
-                                reconstruction_config,
-                                int(n_components),
-                                float(alpha),
-                                regression_name=str(regression_name),
-                                basis=fold_basis,
-                                amplitude_config=amplitude,
-                            )
-                            prediction = model.predict(matrix.loc[fold_validation])
-                            metrics = reconstruction_metrics(
-                                target.reindex(fold_validation),
-                                prediction,
-                                calibration_mean=float(target.reindex(fold_train).mean()),
-                            )
-                            raw_metrics = reconstruction_metrics(
-                                target.reindex(fold_validation),
-                                model.predict_raw(matrix.loc[fold_validation]),
-                                calibration_mean=float(target.reindex(fold_train).mean()),
-                            )
-                            metrics.update({f"raw_{key}": value for key, value in raw_metrics.items()})
-                            metrics["amplitude_slope"] = model.amplitude_calibrator.slope
-                            fold_metrics.append(metrics)
-                        except (RuntimeError, ValueError, np.linalg.LinAlgError):
-                            continue
-                    metrics = pd.DataFrame(fold_metrics)
-                    if metrics.empty:
-                        continue
-                    median_ce = float(metrics["ce"].median())
-                    median_re = float(metrics["re"].median())
-                    median_r = float(metrics["r"].median())
-                    robust_skill = min(median_ce, median_re)
-                    passes = robust_skill >= reconstruction_config.skill_floor
-                    median_sd_ratio = float(metrics["sd_ratio"].median())
-                    amplitude_penalty = (
-                        reconstruction_config.amplitude.auto_sd_ratio_weight
-                        * abs(np.log(max(median_sd_ratio, 1e-12)))
-                        if reconstruction_config.amplitude.method == "auto"
-                        else 0.0
-                    )
-                    rows.append(
-                        {
-                            "regression": str(regression_name),
-                            "regression_order": regression_order[str(regression_name)],
-                            "n_components": int(n_components),
-                            "alpha": float(alpha),
-                            "amplitude_candidate": amplitude_label,
-                            "amplitude_method": amplitude.method,
-                            "amplitude_reference": (
-                                amplitude.variance_reference
-                                if amplitude.method == "variance"
-                                else (
-                                    "observation_dynamic"
-                                    if amplitude.method == "dynamic_variance"
-                                    else "observation" if amplitude.method == "ols" else "none"
-                                )
-                            ),
-                            "folds": len(metrics),
-                            "median_ce": median_ce,
-                            "median_re": median_re,
-                            "median_r": median_r,
-                            "median_rmse": float(metrics["rmse"].median()),
-                            "median_sd_ratio": median_sd_ratio,
-                            "median_variance_ratio": float(metrics["variance_ratio"].median()),
-                            "median_raw_ce": float(metrics["raw_ce"].median()),
-                            "median_raw_re": float(metrics["raw_re"].median()),
-                            "median_amplitude_slope": float(metrics["amplitude_slope"].median()),
-                            "robust_skill": robust_skill,
-                            "passes_skill_floor": bool(passes),
-                            "amplitude_penalty": amplitude_penalty,
-                            "objective": robust_skill + 0.25 * median_r - amplitude_penalty - 0.001 * int(n_components),
-                        }
-                    )
-    selection = pd.DataFrame(rows)
-    if selection.empty:
+    no_amplitude = replace(reconstruction_config.amplitude, method="none")
+
+    def evaluate_candidate(
+        regression_name: str,
+        n_components: int,
+        alpha: float,
+        amplitude_label: str,
+        amplitude: AmplitudeCalibrationConfig,
+        selection_stage: str,
+    ) -> dict[str, object] | None:
+        fold_metrics: list[dict[str, float]] = []
+        for (fold_train, fold_validation), fold_basis in zip(folds, fold_bases):
+            try:
+                fold_model = _fit_candidate(
+                    matrix,
+                    target,
+                    fold_train,
+                    pca_config,
+                    reconstruction_config,
+                    int(n_components),
+                    float(alpha),
+                    regression_name=str(regression_name),
+                    basis=fold_basis,
+                    amplitude_config=amplitude,
+                )
+                prediction = fold_model.predict(matrix.loc[fold_validation])
+                metrics = reconstruction_metrics(
+                    target.reindex(fold_validation),
+                    prediction,
+                    calibration_mean=float(target.reindex(fold_train).mean()),
+                )
+                raw_metrics = reconstruction_metrics(
+                    target.reindex(fold_validation),
+                    fold_model.predict_raw(matrix.loc[fold_validation]),
+                    calibration_mean=float(target.reindex(fold_train).mean()),
+                )
+                metrics.update({f"raw_{key}": value for key, value in raw_metrics.items()})
+                metrics["amplitude_slope"] = fold_model.amplitude_calibrator.slope
+                fold_metrics.append(metrics)
+            except (RuntimeError, ValueError, np.linalg.LinAlgError):
+                continue
+        metrics = pd.DataFrame(fold_metrics)
+        if metrics.empty:
+            return None
+        median_ce = float(metrics["ce"].median())
+        median_re = float(metrics["re"].median())
+        median_r = float(metrics["r"].median())
+        robust_skill = min(median_ce, median_re)
+        minimum_ce = float(metrics["ce"].min())
+        minimum_re = float(metrics["re"].min())
+        minimum_skill = min(minimum_ce, minimum_re)
+        median_sd_ratio = float(metrics["sd_ratio"].median())
+        sd_ratio_error = abs(np.log(max(median_sd_ratio, 1e-12)))
+        return {
+            "selection_stage": selection_stage,
+            "selected": False,
+            "regression": str(regression_name),
+            "regression_order": regression_order[str(regression_name)],
+            "n_components": int(n_components),
+            "alpha": float(alpha),
+            "amplitude_candidate": amplitude_label,
+            "amplitude_method": amplitude.method,
+            "amplitude_reference": (
+                amplitude.variance_reference
+                if amplitude.method == "variance"
+                else (
+                    "observation_dynamic"
+                    if amplitude.method == "dynamic_variance"
+                    else "observation" if amplitude.method == "ols" else "none"
+                )
+            ),
+            "folds": len(metrics),
+            "median_ce": median_ce,
+            "median_re": median_re,
+            "minimum_ce": minimum_ce,
+            "minimum_re": minimum_re,
+            "median_r": median_r,
+            "median_rmse": float(metrics["rmse"].median()),
+            "median_sd_ratio": median_sd_ratio,
+            "median_variance_ratio": float(metrics["variance_ratio"].median()),
+            "median_raw_ce": float(metrics["raw_ce"].median()),
+            "median_raw_re": float(metrics["raw_re"].median()),
+            "median_amplitude_slope": float(metrics["amplitude_slope"].median()),
+            "robust_skill": robust_skill,
+            "minimum_skill": minimum_skill,
+            "passes_skill_floor": bool(
+                minimum_skill >= reconstruction_config.skill_floor
+            ),
+            # Kept as an audit diagnostic. It is intentionally excluded from
+            # structural selection so amplitude cannot change PC count.
+            "sd_ratio_error": sd_ratio_error,
+            "amplitude_penalty": (
+                reconstruction_config.amplitude.auto_sd_ratio_weight
+                * sd_ratio_error
+            ),
+            "objective": robust_skill + 0.25 * median_r - 0.001 * int(n_components),
+        }
+
+    structural_rows: list[dict[str, object]] = []
+    for regression_name, n_components, alpha in structural_grid:
+        row = evaluate_candidate(
+            regression_name,
+            n_components,
+            alpha,
+            "none",
+            no_amplitude,
+            "structure",
+        )
+        if row is not None:
+            structural_rows.append(row)
+    structural_selection = pd.DataFrame(structural_rows)
+    if structural_selection.empty:
         # Short calibration samples cannot support an inner CV.  Fall back to
         # the simplest configured model and make the absence explicit.
-        best_regression, best_components, best_alpha, _, best_amplitude = candidate_grid[0]
+        best_regression, best_components, best_alpha = structural_grid[0]
     else:
-        pool = selection[selection["passes_skill_floor"]]
+        pool = structural_selection[structural_selection["passes_skill_floor"]]
         if pool.empty:
-            pool = selection
+            pool = structural_selection
         best = pool.sort_values(
             ["objective", "median_rmse", "regression_order"],
             ascending=[False, True, True],
@@ -599,10 +632,45 @@ def fit_native_pcr(
         best_regression = str(best["regression"])
         best_components = int(best["n_components"])
         best_alpha = float(best["alpha"])
+        structural_selection.loc[best.name, "selected"] = True
+
+    amplitude_rows: list[dict[str, object]] = []
+    for amplitude_label, amplitude in amplitude_options:
+        row = evaluate_candidate(
+            best_regression,
+            best_components,
+            best_alpha,
+            amplitude_label,
+            amplitude,
+            "amplitude",
+        )
+        if row is not None:
+            amplitude_rows.append(row)
+    amplitude_selection = pd.DataFrame(amplitude_rows)
+    if amplitude_selection.empty:
+        _, best_amplitude = amplitude_options[0]
+    elif len(amplitude_options) == 1:
+        best = amplitude_selection.iloc[0]
+        best_amplitude = amplitude_options[0][1]
+        amplitude_selection.loc[best.name, "selected"] = True
+    else:
+        pool = amplitude_selection[amplitude_selection["passes_skill_floor"]]
+        if pool.empty:
+            pool = amplitude_selection
+        # Skill is primary. Correlation breaks skill ties; amplitude fidelity
+        # is only the third criterion and can no longer buy a worse PCR core.
+        best = pool.sort_values(
+            ["robust_skill", "median_r", "sd_ratio_error", "median_rmse"],
+            ascending=[False, False, True, True],
+        ).iloc[0]
         best_label = str(best["amplitude_candidate"])
         best_amplitude = next(
             amplitude for label, amplitude in amplitude_options if label == best_label
         )
+        amplitude_selection.loc[best.name, "selected"] = True
+    selection = pd.concat(
+        [structural_selection, amplitude_selection], ignore_index=True
+    )
     model = _fit_candidate(
         matrix,
         target,

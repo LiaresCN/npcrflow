@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.1 — two-stage PCA/amplitude selection
+
+- Restored an exact configurable Kaiser (`eigenvalue > threshold`) mode and
+  added `kaiser_cv`, which uses Kaiser only as a contiguous-validation bound.
+- Split model selection into structural and amplitude stages so variance
+  fidelity cannot change PC count, regression family, or regularization.
+- Added PCA eigenvalues, Kaiser count, selection-stage audit fields, and
+  fold means/minima/maxima; CE/RE gates now require every outer fold to pass.
+
 ## 0.4.0 — frozen method release
 
 - Added inner-fold automatic selection among no adjustment, observation

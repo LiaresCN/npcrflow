@@ -78,6 +78,7 @@ def build_config(
             method="pairwise",
             selection="blocked_cv",
             n_components=None,
+            kaiser_threshold=1.0,
             variance_fraction=0.90,
             max_components=5,
             min_pairwise_overlap=10,

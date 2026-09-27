@@ -311,6 +311,33 @@ PDO skill depends on replicated regional coral information. Weighting remains
 available and fully audited, but is disabled in the primary PDO template and
 must be reported as an independence sensitivity rather than assumed to help.
 
+## Version 0.4.1 two-stage PCA and amplitude selection
+
+The legacy PDO/IPO and WNPSM notebooks used the Kaiser rule and retained every
+standardized PCA eigenvalue greater than one. Applying that rule once to the
+current 64-record native-missing PDO network retains 19 PCs. Its apparent
+full-period correlation rises to `0.828`, but the three selection-aware outer
+correlations are `0.406/0.071/0.619`; median `RE/CE` falls to `0.080/0.064`.
+Likewise, a 90% cumulative-variance rule retains 20 PCs and gives outer median
+`r=0.421`. Directly restoring the old threshold therefore overfits this global
+network and is retained only as an auditable compatibility option.
+
+`kaiser_cv` uses the 19-PC Kaiser count as an upper bound and chooses dimension
+with inner contiguous folds. It selects seven PCs for the full model, giving
+apparent `r=0.803`, while outer correlations are `0.561/0.448/0.697`. This is
+safer than direct Kaiser but weaker in the middle block than the capped direct
+blocked search.
+
+The revised two-stage blocked method first selects the raw PCR structure and
+only then compares amplitude mappings. It selects four PCs and no amplitude
+adjustment. Apparent `r` recovers from the frozen automatic method's `0.741` to
+`0.778`; the three outer correlations are `0.561/0.559/0.697`, with all fold
+CE values positive (`0.252/0.192/0.469`). Relative to the frozen joint search,
+the middle holdout improves from `r=0.412`, `CE=-0.013` to `r=0.559`,
+`CE=0.192`. The new default therefore remains blocked validation, not direct
+Kaiser. Kaiser eigenvalues/counts are reported as diagnostics, and amplitude
+fidelity can no longer alter PC count, regression family, or regularization.
+
 ## WNPSM
 
 Using the legacy notebook's effective 60–180°E raw-longitude subset selects 35

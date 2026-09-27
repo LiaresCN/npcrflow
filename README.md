@@ -12,14 +12,14 @@ files live under this project.
 ## Installation
 
 ```bash
-python -m pip install git+https://github.com/LiaresCN/npcrflow.git@v0.4.0
+python -m pip install git+https://github.com/LiaresCN/npcrflow.git@v0.4.1
 ```
 
 For an offline MEL installation, use the release wheel without modifying the
 source environment:
 
 ```bash
-python -m pip install /path/to/npcrflow-0.4.0-py3-none-any.whl
+python -m pip install /path/to/npcrflow-0.4.1-py3-none-any.whl
 ```
 
 ## Minimal use
@@ -234,6 +234,15 @@ and Vanuatu coral information, but lowers PDO external CE/RE. The capability
 is retained for honest pseudo-replication tests rather than forced into every
 reconstruction.
 
+Version 0.4.1 separates structural PCR selection from amplitude calibration.
+PC count, regression, and regularization are selected from raw predictions;
+only then can an amplitude option be chosen. It also restores exact Kaiser
+selection as an auditable compatibility mode and adds `kaiser_cv`, while
+retaining blocked validation as the PDO default. Direct Kaiser keeps 19 PCs
+and overfits the current PDO network; the revised default keeps four PCs,
+restores apparent `r=0.778`, and gives outer-block correlations
+`0.561/0.559/0.697` with positive CE in every block.
+
 ## Compact outputs
 
 Depending on the enabled options, a run writes `source_qc.csv`, `proxy_screening.csv`,
@@ -282,8 +291,10 @@ constraints and is never expanded into three synthetic annual observations.
 Each enabled network sensitivity writes both its repeat-level table and a
 compact `*_summary.csv` containing the minimum, 5/25/50/75/95th percentiles,
 and maximum of the applicable correlation, RMSE, RE, and CE metrics.
-The primary `validation_summary.csv` likewise reports fold medians and 5–95%
-ranges; low-frequency runs also report median `core_*` scores before adjustment.
+The primary `validation_summary.csv` likewise reports fold means, minima,
+maxima, medians, and 5–95% ranges; its CE/RE gate now requires every outer fold
+to pass, rather than allowing a negative middle fold to hide behind a positive
+median. Low-frequency runs also report median `core_*` scores before adjustment.
 
 ## Current verification
 

@@ -23,7 +23,7 @@ from npcrflow.config import (
 from npcrflow.amplitude import fit_amplitude_calibrator
 from npcrflow.data import annualize_record, load_observations, load_proxy_database
 from npcrflow.deduplicate import deduplicate_frame
-from npcrflow.model import fit_native_pcr
+from npcrflow.model import _component_candidates, fit_native_pcr
 from npcrflow.pipeline import filter_records_with_report, run_pipeline
 from npcrflow.records import ProxyCollection, ProxyRecord
 from npcrflow.low_frequency import _native_support_widths, variational_low_frequency_adjustment
@@ -806,6 +806,88 @@ class ModelTests(unittest.TestCase):
             },
         )
 
+    def test_kaiser_and_kaiser_cv_component_rules(self):
+        eigenvalues = np.array([3.0, 1.2, 0.9, 0.4])
+        self.assertEqual(
+            _component_candidates(
+                eigenvalues,
+                PCAConfig(selection="kaiser", max_components=4),
+            ),
+            [2],
+        )
+        self.assertEqual(
+            _component_candidates(
+                eigenvalues,
+                PCAConfig(selection="kaiser_cv", max_components=4),
+            ),
+            [1, 2],
+        )
+        self.assertEqual(
+            _component_candidates(
+                eigenvalues,
+                PCAConfig(
+                    selection="kaiser", kaiser_threshold=0.8, max_components=4
+                ),
+            ),
+            [3],
+        )
+
+    def test_amplitude_auto_cannot_change_structural_model(self):
+        rng = np.random.default_rng(29)
+        years = np.arange(1900, 1990)
+        slow = np.sin(np.arange(len(years)) / 8.0)
+        fast = 0.45 * np.cos(np.arange(len(years)) / 2.5)
+        target = pd.Series(slow + fast, index=years)
+        matrix = pd.DataFrame(
+            {
+                "p1": slow + rng.normal(0, 0.15, len(years)),
+                "p2": fast + rng.normal(0, 0.15, len(years)),
+                "p3": target.to_numpy() + rng.normal(0, 0.30, len(years)),
+            },
+            index=years,
+        )
+        common = dict(
+            regression="ridge",
+            ridge_alphas=(0.0, 10.0, 100.0),
+            validation_block_years=20,
+            n_bootstrap=0,
+        )
+        pca = PCAConfig(selection="blocked_cv", max_components=3)
+        baseline = fit_native_pcr(
+            matrix,
+            target,
+            years,
+            pca,
+            ReconstructionConfig(
+                **common,
+                amplitude=AmplitudeCalibrationConfig(method="none"),
+            ),
+        )
+        automatic = fit_native_pcr(
+            matrix,
+            target,
+            years,
+            pca,
+            ReconstructionConfig(
+                **common,
+                amplitude=AmplitudeCalibrationConfig(
+                    method="auto", dynamic_minimum_bin_years=10
+                ),
+            ),
+        )
+        self.assertEqual(automatic.n_components, baseline.n_components)
+        self.assertEqual(automatic.regression_name, baseline.regression_name)
+        self.assertEqual(automatic.alpha, baseline.alpha)
+        structure = automatic.selection_table.query("selection_stage == 'structure'")
+        self.assertTrue((structure["amplitude_method"] == "none").all())
+        self.assertEqual(int(structure["selected"].sum()), 1)
+        amplitude = automatic.selection_table.query("selection_stage == 'amplitude'")
+        self.assertEqual(int(amplitude["selected"].sum()), 1)
+        np.testing.assert_array_equal(
+            automatic.selection_table["passes_skill_floor"].to_numpy(bool),
+            (automatic.selection_table["minimum_skill"] >= 0.0).to_numpy(bool),
+        )
+
     def test_proxy_weights_downweight_correlated_neighbors_and_report_error(self):
         rng = np.random.default_rng(23)
         years = np.arange(1900, 1950)
@@ -907,6 +989,8 @@ class ModelTests(unittest.TestCase):
         self.assertFalse(folds.empty)
         self.assertIn("core_ce", folds)
         self.assertIn("raw_ce", folds)
+        self.assertIn("pca_selection", folds)
+        self.assertIn("kaiser_component_count", folds)
         self.assertGreater(int(folds["low_frequency_proxy_count"].max()), 0)
         self.assertEqual(folds.iloc[0]["holdout_position"], "early")
         self.assertEqual(folds.iloc[-1]["holdout_position"], "late")

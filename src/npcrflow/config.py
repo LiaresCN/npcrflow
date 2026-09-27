@@ -113,8 +113,11 @@ class PCAConfig:
     """Principal-component settings for complete or native-resolution data."""
 
     method: Literal["pairwise", "complete"] = "pairwise"
-    selection: Literal["kaiser", "variance", "fixed", "blocked_cv"] = "blocked_cv"
+    selection: Literal[
+        "kaiser", "kaiser_cv", "variance", "fixed", "blocked_cv"
+    ] = "blocked_cv"
     n_components: int | None = None
+    kaiser_threshold: float = 1.0
     variance_fraction: float = 0.90
     max_components: int = 10
     min_pairwise_overlap: int = 10
@@ -124,6 +127,8 @@ class PCAConfig:
     def __post_init__(self) -> None:
         if self.selection == "fixed" and (self.n_components is None or self.n_components < 1):
             raise ValueError("fixed PCA selection requires n_components >= 1")
+        if self.kaiser_threshold <= 0:
+            raise ValueError("kaiser_threshold must be positive")
         if not 0 < self.variance_fraction <= 1:
             raise ValueError("variance_fraction must be in (0, 1]")
         if self.max_components < 1:

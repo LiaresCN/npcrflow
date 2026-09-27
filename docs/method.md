@@ -43,11 +43,17 @@ approximately the influence of one independent record rather than the number
 of database copies or nearby series it contains. These weights never fill or
 alter an observation.
 
-PC count, regularization strength, and—when `regression="auto"` is requested—
-the regression family are chosen by inner contiguous-block validation. The
-default automatic candidate set is Ridge, PLS, and ElasticNet. Random forest
-is intentionally excluded from that set because its PDO apparent fit did not
-generalize under contiguous external validation.
+PC count can be fixed, selected by cumulative explained variance, reproduced
+with the legacy Kaiser rule (`eigenvalue > kaiser_threshold`), bounded by that
+rule and then selected with contiguous validation (`kaiser_cv`), or selected
+directly by blocked validation. Kaiser is applied to the standardized
+training-period correlation structure and capped explicitly; it is not assumed
+to guarantee predictive skill. Regularization strength and—when
+`regression="auto"` is requested—the regression family are chosen by the same
+inner contiguous-block design. The default automatic candidate set is Ridge,
+PLS, and ElasticNet. Random forest is intentionally excluded from that set
+because its PDO apparent fit did not generalize under contiguous external
+validation.
 Outer contiguous folds refit target-based proxy screening, proxy means/scales,
 the PCA basis, component choice, and regression. The held-out target therefore
 cannot influence even the network membership. The full reconstruction is fit only after validation.
@@ -73,10 +79,13 @@ weighted proxy count, shrinks each local estimate toward the global
 training-period ratio, and linearly interpolates the bounded slopes between bin
 centres. It is therefore continuous rather than a hard NEST boundary.
 `method="auto"` treats no adjustment, both global variance references, and the
-dynamic model as inner-fold candidates. Its objective retains the CE/RE skill
-gate and correlation tie-breaker while adding a configurable penalty for a
-validation standard-deviation ratio far from one. The selected option is then
-locked before the outer holdout is predicted.
+dynamic model as inner-fold candidates. Selection is explicitly two-stage.
+First the PC count, regression family, and regularization are chosen from raw
+predictions. The skill-floor gate applies to the minimum inner-fold CE/RE, not
+only their median. With that structure locked, amplitude candidates are ranked by
+robust CE/RE, then correlation, then standard-deviation fidelity. The selected
+option is locked before the outer holdout is predicted. This prevents a better
+amplitude ratio from purchasing a worse PCR structure.
 
 ## Low-frequency constraint
 

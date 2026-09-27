@@ -431,7 +431,11 @@ def blocked_validation(
                     "validation_end": int(validation.max()),
                     "holdout_position": _holdout_position(validation, years),
                     "regression": model.regression_name,
+                    "pca_selection": pca_config.selection,
                     "n_components": model.n_components,
+                    "kaiser_component_count": int(
+                        np.sum(model.eigenvalues > pca_config.kaiser_threshold)
+                    ),
                     "alpha": model.alpha,
                     "weighted_proxy_count": float(model.proxy_weights.sum()),
                     "downweighted_proxy_count": int((model.proxy_weights < 1.0).sum()),
@@ -593,7 +597,11 @@ def blocked_pipeline_validation(
                         selected_multiresolution.lowpass_period_years
                     ),
                     "regression": model.regression_name,
+                    "pca_selection": pca_config.selection,
                     "n_components": model.n_components,
+                    "kaiser_component_count": int(
+                        np.sum(model.eigenvalues > pca_config.kaiser_threshold)
+                    ),
                     "alpha": model.alpha,
                     "weighted_proxy_count": float(model.proxy_weights.sum()),
                     "downweighted_proxy_count": int((model.proxy_weights < 1.0).sum()),
@@ -701,6 +709,9 @@ def reconstruct(
     for metric in ("r", "rmse", "re", "ce", "sd_ratio", "variance_ratio"):
         values = pd.to_numeric(fold_table.get(metric, pd.Series(dtype=float)), errors="coerce").dropna()
         summary[f"median_{metric}"] = float(values.median()) if not values.empty else np.nan
+        summary[f"mean_{metric}"] = float(values.mean()) if not values.empty else np.nan
+        summary[f"minimum_{metric}"] = float(values.min()) if not values.empty else np.nan
+        summary[f"maximum_{metric}"] = float(values.max()) if not values.empty else np.nan
         summary[f"q05_{metric}"] = float(values.quantile(0.05)) if not values.empty else np.nan
         summary[f"q95_{metric}"] = float(values.quantile(0.95)) if not values.empty else np.nan
         core_metric = f"core_{metric}"
@@ -753,28 +764,30 @@ def reconstruct(
                     float(values.median()) if not values.empty else np.nan
                 )
     ce_pass = reconstruction_config.min_ce is None or (
-        np.isfinite(summary["median_ce"]) and summary["median_ce"] >= reconstruction_config.min_ce
+        np.isfinite(summary["minimum_ce"])
+        and summary["minimum_ce"] >= reconstruction_config.min_ce
     )
     re_pass = reconstruction_config.min_re is None or (
-        np.isfinite(summary["median_re"]) and summary["median_re"] >= reconstruction_config.min_re
+        np.isfinite(summary["minimum_re"])
+        and summary["minimum_re"] >= reconstruction_config.min_re
     )
     summary["ce_threshold"] = reconstruction_config.min_ce
     summary["re_threshold"] = reconstruction_config.min_re
     summary["skill_gate_passed"] = bool(ce_pass and re_pass)
     strong = reconstruction_config.strong_skill_threshold
     strong_pass = bool(
-        np.isfinite(summary["median_ce"])
-        and np.isfinite(summary["median_re"])
-        and summary["median_ce"] >= strong
-        and summary["median_re"] >= strong
+        np.isfinite(summary["minimum_ce"])
+        and np.isfinite(summary["minimum_re"])
+        and summary["minimum_ce"] >= strong
+        and summary["minimum_re"] >= strong
     )
     summary["strong_skill_threshold"] = strong
     summary["strong_skill_passed"] = strong_pass
     positive_skill = bool(
-        np.isfinite(summary["median_ce"])
-        and np.isfinite(summary["median_re"])
-        and summary["median_ce"] >= 0.0
-        and summary["median_re"] >= 0.0
+        np.isfinite(summary["minimum_ce"])
+        and np.isfinite(summary["minimum_re"])
+        and summary["minimum_ce"] >= 0.0
+        and summary["minimum_re"] >= 0.0
     )
     if not positive_skill:
         summary["skill_class"] = "negative"

@@ -290,6 +290,14 @@ def save_pipeline_result(
         "selected_proxy_count": int(result.screening["selected"].sum()),
         "model_proxy_count": len(result.reconstruction.model.columns),
         "n_components": result.reconstruction.model.n_components,
+        "pca_eigenvalues": result.reconstruction.model.eigenvalues.tolist(),
+        "kaiser_threshold": config.pca.kaiser_threshold,
+        "kaiser_component_count": int(
+            np.sum(
+                result.reconstruction.model.eigenvalues
+                > config.pca.kaiser_threshold
+            )
+        ),
         "regression": result.reconstruction.model.regression_name,
         "alpha": result.reconstruction.model.alpha,
         "amplitude_method": result.reconstruction.model.amplitude_calibrator.method,
