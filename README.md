@@ -12,14 +12,14 @@ files live under this project.
 ## Installation
 
 ```bash
-python -m pip install git+https://github.com/LiaresCN/npcrflow.git@v0.4.2
+python -m pip install git+https://github.com/LiaresCN/npcrflow.git@v0.5.0
 ```
 
 For an offline MEL installation, use the release wheel without modifying the
 source environment:
 
 ```bash
-python -m pip install /path/to/npcrflow-0.4.2-py3-none-any.whl
+python -m pip install /path/to/npcrflow-0.5.0-py3-none-any.whl
 ```
 
 ## Minimal use
@@ -49,7 +49,11 @@ cfg = PipelineConfig(
     pca=PCAConfig(method="pairwise", selection="blocked_cv"),
     reconstruction=ReconstructionConfig(
         calibration_period=(1940, 2010),
-        interpolation="none",
+        interpolation="archive_linear",
+        interpolation_archives=("Wood", "Coral"),
+        interpolation_max_gap_years=2,
+        interpolation_max_resolution_years=2.0,
+        retain_longest_annual_segment=True,
         regression="auto",
         regression_candidates=("ridge", "pls", "elasticnet"),
         n_bootstrap=200,
@@ -136,12 +140,14 @@ Create the audited Dod2k copy with:
 
 ## What changed from the notebooks
 
-- Raw proxy observations are never linearly interpolated. The former legacy
-  comparison switch has been removed; any non-`none` interpolation request is
-  now a hard configuration error.
+- Proxy screening always uses observed values. During reconstruction,
+  `archive_linear` may fill only complete, bounded short gaps in explicitly
+  allowed near-annual archives. The default allows Wood and Coral, limits gaps
+  to two years, and never extrapolates either record endpoint. Ice,
+  speleothem, and other archives retain their native timestamps.
+  `interpolation="none"` remains available for a strict native-gap sensitivity.
   Pairwise covariance estimates the PCA basis from available overlaps, and a
-  least-squares score is computed from whatever proxies are observed in each
-  year.
+  least-squares score is computed from the proxy values available in each year.
 - Screening p values use lag-1 effective sample size. Automatic seasonal
   selection applies a Holm correction across seasons tested for each
   subannual record; already annual records are not retested under fake seasons.
@@ -187,8 +193,9 @@ Create the audited Dod2k copy with:
   fold. Raw predictions, calibrated predictions, slope, and intercept remain
   auditable, so amplitude cannot be changed after looking at withheld scores.
 - Native records at or below the configured regression-resolution limit can
-  participate directly in pairwise PCR at their observed years, with `NaN` in
-  every unobserved year. Slower proxies can be reserved for native-window low-frequency
+  participate directly in pairwise PCR at their observed years. Only eligible
+  Wood/Coral short gaps may be filled under the declared interpolation policy;
+  other unobserved years remain `NaN`. Slower proxies can be reserved for native-window low-frequency
   assimilation. The latent result remains annual, but a decadal observation
   constrains only the mean low-pass state over its native support interval. It
   does not become ten annual observations. The PCR core is explicitly split
@@ -257,12 +264,19 @@ segment tests are supplementary only, use the two directed 2/3-to-1/3 edge
 splits, and report both fixed-full-grid and fold-rescreened networks. They no
 longer produce a pass/fail or `strong` classification for the main result.
 
+Version 0.5.0 makes the saved main product the longest continuous interval of
+finite annual estimates. Near-annual Wood and Coral records may fill complete
+interior gaps up to a declared length (two years by default); no endpoint is
+extrapolated, and all other archives remain native. Every filled proxy-year is
+reported separately and `interpolation="none"` remains available.
+
 ## Compact outputs
 
 Depending on the enabled options, a run writes `source_qc.csv`, `proxy_screening.csv`,
 `reconstruction.csv`, `observation_fit.csv`, `primary_reconstruction_summary.csv`,
 `validation_folds.csv`, `validation_summary.csv`,
-`model_selection.csv`, `proxy_availability.csv`, sensitivity summaries, one
+`model_selection.csv`, `proxy_availability.csv`,
+`proxy_interpolation_audit.csv`, sensitivity summaries, one
 proxy map, one observation diagnostic figure, and `manifest.json`. The manifest contains input hashes and the full
 configuration.  `save_nests` defaults to false and no implementation path saves
 nest ensembles.
@@ -292,8 +306,10 @@ filter reasons.  Records with implausible end years are excluded and reported,
 never silently edited in the source database.
 
 `proxy_availability.csv` distinguishes `annual_core`, `low_frequency_only`,
-and `unconstrained` years and reports both annual-core proxy counts and native
-low-resolution support counts. When amplitude calibration is enabled,
+and `unconstrained` years and reports native, interpolated, annual-core, and
+low-resolution support counts. `proxy_interpolation_audit.csv` records archive,
+native resolution, eligibility, and number of filled years for each proxy.
+When amplitude calibration is enabled,
 `reconstruction.csv` retains `point_raw` and `median_raw` beside the calibrated
 series. A multiresolution run additionally retains the core low/high-frequency
 components, adjusted low-frequency component, and applied increment.

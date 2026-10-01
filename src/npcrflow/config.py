@@ -287,7 +287,9 @@ class MultiresolutionConfig:
 class ReconstructionConfig:
     """Reconstruction and validation settings.
 
-    ``interpolation='none'`` is mandatory and never fills a proxy value.
+    ``interpolation='archive_linear'`` permits only bounded, interior linear
+    interpolation for explicitly listed near-annual archives and never
+    extrapolates record endpoints. ``none`` preserves every native gap.
     ``auto_tune=False`` uses
     the first admissible PC count and first configured regularization value;
     the default performs nested blocked tuning.  CE and RE thresholds apply
@@ -298,7 +300,11 @@ class ReconstructionConfig:
 
     calibration_period: tuple[int, int] | None = None
     reconstruction_period: tuple[int | None, int | None] | None = None
-    interpolation: Literal["none"] = "none"
+    interpolation: Literal["none", "archive_linear"] = "archive_linear"
+    interpolation_archives: tuple[str, ...] = ("Wood", "Coral")
+    interpolation_max_gap_years: int = 2
+    interpolation_max_resolution_years: float = 2.0
+    retain_longest_annual_segment: bool = True
     detrend_proxies: bool = False
     regression: Literal[
         "auto", "ols", "ridge", "pls", "elasticnet", "random_forest"
@@ -331,8 +337,17 @@ class ReconstructionConfig:
     multiresolution: MultiresolutionConfig = field(default_factory=MultiresolutionConfig)
 
     def __post_init__(self) -> None:
-        if self.interpolation != "none":
-            raise ValueError("proxy interpolation is disabled; native missing values must be retained")
+        if self.interpolation not in {"none", "archive_linear"}:
+            raise ValueError("interpolation must be 'none' or 'archive_linear'")
+        archive_names = [str(name).strip().casefold() for name in self.interpolation_archives]
+        if len(archive_names) != len(set(archive_names)):
+            raise ValueError("interpolation_archives contains duplicate archive names")
+        if self.interpolation == "archive_linear" and not archive_names:
+            raise ValueError("archive_linear interpolation requires at least one archive")
+        if self.interpolation_max_gap_years < 1:
+            raise ValueError("interpolation_max_gap_years must be at least 1")
+        if self.interpolation_max_resolution_years <= 0:
+            raise ValueError("interpolation_max_resolution_years must be positive")
         if self.calibration_period is not None and self.calibration_period[0] > self.calibration_period[1]:
             raise ValueError("calibration period must be increasing")
         if self.reconstruction_period is not None:

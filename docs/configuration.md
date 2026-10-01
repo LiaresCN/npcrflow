@@ -36,8 +36,17 @@ The same fields are available through the typed Python configuration classes.
 - The manifest stores the complete fitted eigenvalue spectrum and full-model
   Kaiser count. Each outer validation row stores its training-only Kaiser count
   beside the actually selected component count.
-- `reconstruction.interpolation`: only `none` is accepted. Any interpolation
-  request is a hard error; native missing years remain `NaN`.
+- `reconstruction.interpolation`: `archive_linear` or `none`.
+  `archive_linear` fills only complete interior gaps in the archives named by
+  `interpolation_archives` (Wood and Coral by default), only when native
+  resolution is no coarser than `interpolation_max_resolution_years`, and only
+  through `interpolation_max_gap_years` consecutive missing years. It never
+  extrapolates beyond a record's endpoints. Screening always uses observed
+  values. `none` retains every native gap as a strict sensitivity.
+- `retain_longest_annual_segment=True` trims the saved main reconstruction and
+  availability table to the longest consecutive interval with finite annual
+  estimates. This controls the final product, not the temporal support of the
+  input proxies.
 - `reconstruction.regression`: `auto`, `ols`, `ridge`, `pls`, `elasticnet`, or
   `random_forest`. With `auto`, `regression_candidates` defaults to Ridge, PLS,
   and ElasticNet, and the family is selected only with inner contiguous blocks

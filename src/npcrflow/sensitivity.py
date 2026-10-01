@@ -87,6 +87,9 @@ def _fit_network(
         screening[screening["pid"].isin(pids)],
         reconstruction_config.reconstruction_period,
         reconstruction_config.interpolation,
+        reconstruction_config.interpolation_archives,
+        reconstruction_config.interpolation_max_gap_years,
+        reconstruction_config.interpolation_max_resolution_years,
     )
     years = target.dropna().index.to_numpy(int)
     if reconstruction_config.calibration_period is not None:
@@ -226,6 +229,9 @@ def run_network_sensitivities(
                     local_screening,
                     reconstruction_config.reconstruction_period,
                     reconstruction_config.interpolation,
+                    reconstruction_config.interpolation_archives,
+                    reconstruction_config.interpolation_max_gap_years,
+                    reconstruction_config.interpolation_max_resolution_years,
                 )
                 train = target.loc[
                     (target.index >= calibration_period[0])

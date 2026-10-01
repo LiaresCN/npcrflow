@@ -45,6 +45,8 @@ def main() -> None:
             ),
             reconstruction=replace(
                 config.reconstruction,
+                interpolation="none",
+                retain_longest_annual_segment=False,
                 regression=requested_regression,
                 regression_candidates=("ridge", "pls", "elasticnet"),
                 n_bootstrap=0,

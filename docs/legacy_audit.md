@@ -49,8 +49,11 @@ Source code reviewed:
 
 ## Design response
 
-`npcrflow` rejects the legacy linear-interpolation option; any non-`none`
-request is a hard error. The path uses native missingness, calibration-contained
-preprocessing, nested contiguous validation, standard RE/CE, deterministic
-seeds, in-memory results, automatic end years, regularized linear alternatives,
-and compact sensitivity tables.
+`npcrflow` rejects the legacy unrestricted interpolation and extrapolation
+path. Version 0.5 permits only declared near-annual archives (Wood and Coral by
+default) to fill complete interior gaps no longer than the configured limit;
+it never fills a long hiatus or extrapolates endpoints. `interpolation="none"`
+retains strict native missingness. The path otherwise uses
+calibration-contained preprocessing, nested contiguous validation, standard
+RE/CE, deterministic seeds, in-memory results, automatic end years,
+regularized linear alternatives, and compact sensitivity tables.

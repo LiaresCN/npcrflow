@@ -55,7 +55,11 @@
   "reconstruction": {
     "calibration_period": [1900, 2000],
     "reconstruction_period": [0, null],
-    "interpolation": "none",
+    "interpolation": "archive_linear",
+    "interpolation_archives": ["Wood", "Coral"],
+    "interpolation_max_gap_years": 2,
+    "interpolation_max_resolution_years": 2.0,
+    "retain_longest_annual_segment": true,
     "detrend_proxies": false,
     "regression": "ridge",
     "regression_candidates": ["ridge", "pls", "elasticnet"],

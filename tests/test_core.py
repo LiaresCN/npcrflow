@@ -29,6 +29,7 @@ from npcrflow.records import ProxyCollection, ProxyRecord
 from npcrflow.low_frequency import _native_support_widths, variational_low_frequency_adjustment
 from npcrflow.reconstruction import blocked_pipeline_validation, blocked_validation
 from npcrflow.reconstruction import (
+    _longest_contiguous_annual_period,
     build_proxy_matrix,
     split_resolution_roles,
     tune_multiresolution_config,
@@ -556,9 +557,46 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(int(matrix["three_year"].notna().sum()), len(years[::3]))
         self.assertTrue(np.isnan(matrix.loc[1901, "three_year"]))
 
-    def test_any_interpolation_request_is_rejected(self):
-        with self.assertRaisesRegex(ValueError, "interpolation is disabled"):
+    def test_unsupported_interpolation_request_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "interpolation must be"):
             ReconstructionConfig(interpolation="linear")  # type: ignore[arg-type]
+
+    def test_archive_interpolation_fills_only_short_internal_wood_coral_gaps(self):
+        years = [1900, 1901, 1904, 1905, 1910, 1911]
+        records = {
+            "wood": ProxyRecord(
+                "wood", years, [0, 1, 4, 5, 10, 11], archive="Wood"
+            ),
+            "ice": ProxyRecord(
+                "ice", [1899, *years, 1912], [-1, 0, 1, 4, 5, 10, 11, 12],
+                archive="GlacierIce",
+            ),
+        }
+        matrix = build_proxy_matrix(
+            records,
+            ["wood", "ice"],
+            ScreeningConfig(),
+            interpolation="archive_linear",
+            interpolation_archives=("Wood", "Coral"),
+            interpolation_max_gap_years=2,
+            interpolation_max_resolution_years=2.0,
+        )
+        self.assertAlmostEqual(float(matrix.loc[1902, "wood"]), 2.0)
+        self.assertAlmostEqual(float(matrix.loc[1903, "wood"]), 3.0)
+        self.assertTrue(np.isnan(matrix.loc[1906, "wood"]))
+        self.assertTrue(np.isnan(matrix.loc[1902, "ice"]))
+        self.assertTrue(np.isnan(matrix.loc[1899, "wood"]))
+        self.assertTrue(np.isnan(matrix.loc[1912, "wood"]))
+        audit = matrix.attrs["interpolation_audit"].set_index("pid")
+        self.assertEqual(int(audit.loc["wood", "interpolated_year_count"]), 2)
+        self.assertEqual(int(audit.loc["ice", "interpolated_year_count"]), 0)
+
+    def test_longest_contiguous_annual_period_prefers_earliest_tie(self):
+        values = pd.Series(
+            [1.0, 2.0, np.nan, 3.0, 4.0, np.nan, 5.0],
+            index=[1900, 1901, 1902, 1903, 1904, 1905, 1906],
+        )
+        self.assertEqual(_longest_contiguous_annual_period(values), (1900, 1901))
 
     def test_standard_re_and_ce_denominators(self):
         observed = pd.Series([1.0, 2.0, 3.0], index=[1, 2, 3])

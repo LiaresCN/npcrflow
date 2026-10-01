@@ -24,6 +24,22 @@ main evidence is defined in the update above.
 
 ## PDO
 
+### Version 0.5.0 longest continuous annual output
+
+With bounded Wood/Coral interpolation enabled (maximum two-year interior gap,
+no endpoint extrapolation), the saved PDO result is the longest continuous
+annual interval: 538–2012, containing 1,475 consecutive finite annual values.
+Only two proxy-year values are interpolated, both from two Coral records; no
+Wood, GlacierIce, or Speleothem value is filled in this run. The first and last
+saved years each retain at least two native model proxies.
+
+The scientific fit is effectively unchanged: main `r=0.7782`, SD ratio
+`0.7154`, internal median `CE=0.5085`, and internal median `RE=0.5167`.
+Version 0.4.2 retained the full 0–2013 index even though its finite estimates
+were split into 102 separate fragments; its longest continuous finite fragment
+was already 538–2012. Version 0.5.0 therefore makes the final product explicit
+and compact rather than claiming a disconnected maximum span.
+
 ### Version 0.4.2 main evidence and robustness sensitivities
 
 The complete screened-network reconstruction is unchanged from the recommended

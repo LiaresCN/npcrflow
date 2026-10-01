@@ -66,7 +66,7 @@ def build_config(
             min_overlap=20,
             low_resolution_min_overlap=8,
             # Records slower than 1.5 years may use the explicitly declared
-            # low-resolution overlap rule; values are still never filled.
+            # low-resolution overlap rule; screening still uses observations.
             low_resolution_cutoff_years=1.5,
             p_threshold=0.10,
             r_threshold=0.20,
@@ -88,7 +88,11 @@ def build_config(
         reconstruction=ReconstructionConfig(
             calibration_period=(1900, 2000),
             reconstruction_period=(0, None),
-            interpolation="none",
+            interpolation="archive_linear",
+            interpolation_archives=("Wood", "Coral"),
+            interpolation_max_gap_years=2,
+            interpolation_max_resolution_years=2.0,
+            retain_longest_annual_segment=True,
             detrend_proxies=False,
             regression="ridge",
             ridge_alphas=(0.0, 0.01, 0.1, 1.0, 10.0, 100.0),
@@ -141,7 +145,8 @@ def build_config(
                 enabled=multiresolution_enabled,
                 state_timestep_years=1,
                 # Native records up to and including 10-year resolution enter
-                # pairwise PCR at observed years only; no values are filled.
+                # pairwise PCR at native years; only declared short Wood/Coral
+                # gaps may be filled by the reconstruction policy above.
                 regression_max_resolution_years=10.0,
                 lowpass_period_years=10.0,
                 smoothness_multiplier=1.0,

@@ -40,7 +40,12 @@ def main() -> None:
                 min_proxies_per_year=2,
                 score_ridge=0.10,
             ),
-            reconstruction=replace(config.reconstruction, n_bootstrap=0),
+            reconstruction=replace(
+                config.reconstruction,
+                interpolation="none",
+                retain_longest_annual_segment=False,
+                n_bootstrap=0,
+            ),
             output=replace(
                 config.output,
                 save_proxy_map=False,

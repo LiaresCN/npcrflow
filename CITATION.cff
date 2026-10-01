@@ -1,7 +1,7 @@
 cff-version: 1.2.0
 message: "If you use NPCRFlow, please cite this software release."
 title: "NPCRFlow: leakage-aware native-resolution proxy climate reconstruction"
-version: 0.4.2
+version: 0.5.0
 date-released: 2026-10-01
 license: MIT
 authors:

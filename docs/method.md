@@ -26,12 +26,22 @@ records to the low-frequency layer without relaxing the annual-network rule.
 ## Native-resolution PCR
 
 The annual matrix contains observed annual/seasonal bins and `NaN` elsewhere.
-No default interpolation occurs. Pairwise proxy correlations are estimated from
-their finite overlaps, symmetrized, and decomposed spectrally. For each year,
-PC scores are solved from the loadings of the proxies actually present that
-year. A small configured ridge penalty stabilizes underdetermined years; years
-with fewer than the required observed proxies remain missing rather than being
-fabricated.
+The default reconstruction policy may linearly fill only complete, bounded
+short gaps in explicitly allowed near-annual archives (Wood and Coral by
+default). Gaps longer than the configured limit, record endpoints, and all
+other archives remain untouched. Screening still uses observed values only.
+Pairwise proxy correlations are estimated from finite overlaps, symmetrized,
+and decomposed spectrally. For each year, PC scores are solved from the
+loadings of the proxy values available that year. A small configured ridge
+penalty stabilizes underdetermined years; years with fewer than the required
+values remain missing.
+
+The saved main result is trimmed to the longest contiguous interval having a
+finite annual reconstruction. This produces the longest defensible annual
+series rather than downsampling the result to the coarsest proxy or retaining
+disconnected annual fragments. Native and interpolated proxy counts remain
+separate in the availability audit, and every filled proxy-year is listed in
+`proxy_interpolation_audit.csv`.
 
 When proxy weighting is enabled, standardized proxy columns are multiplied by
 the square root of their training-derived reliability/redundancy weight before

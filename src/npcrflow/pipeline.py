@@ -248,6 +248,10 @@ def save_pipeline_result(
         result.reconstruction.proxy_weights.to_csv(paths["proxy_weights"], index=False)
         paths["availability"] = output / "proxy_availability.csv"
         result.reconstruction.availability.to_csv(paths["availability"], index=False)
+        paths["interpolation_audit"] = output / "proxy_interpolation_audit.csv"
+        result.reconstruction.interpolation_audit.to_csv(
+            paths["interpolation_audit"], index=False
+        )
         if not result.reconstruction.low_frequency_constraints.empty:
             paths["low_frequency_constraints"] = output / "low_frequency_constraints.csv"
             result.reconstruction.low_frequency_constraints.to_csv(paths["low_frequency_constraints"], index=False)
@@ -293,6 +297,10 @@ def save_pipeline_result(
     if not selected_rows.empty:
         selected_proxy_weight = float(selected_rows.iloc[0]["proxy_constraint_weight"])
         selected_lowpass_period = float(selected_rows.iloc[0]["lowpass_period_years"])
+    reconstruction_years = pd.to_numeric(
+        result.reconstruction.reconstruction["Year"], errors="coerce"
+    ).dropna()
+    interpolation_audit = result.reconstruction.interpolation_audit
     manifest = {
         "created_utc": datetime.now(timezone.utc).isoformat(),
         "package": "npcrflow",
@@ -308,6 +316,15 @@ def save_pipeline_result(
         "metadata_filter_proxy_count": int(result.source_qc["included"].sum()),
         "selected_proxy_count": int(result.screening["selected"].sum()),
         "model_proxy_count": len(result.reconstruction.model.columns),
+        "annual_output_start": int(reconstruction_years.min()),
+        "annual_output_end": int(reconstruction_years.max()),
+        "annual_output_year_count": int(len(reconstruction_years)),
+        "interpolated_proxy_count": int(
+            (interpolation_audit.get("interpolated_year_count", pd.Series(dtype=int)) > 0).sum()
+        ),
+        "interpolated_year_value_count": int(
+            interpolation_audit.get("interpolated_year_count", pd.Series(dtype=int)).sum()
+        ),
         "n_components": result.reconstruction.model.n_components,
         "pca_eigenvalues": result.reconstruction.model.eigenvalues.tolist(),
         "kaiser_threshold": config.pca.kaiser_threshold,

@@ -1,4 +1,4 @@
-"""Missing-data PCR and regularized regression fitted without proxy interpolation."""
+"""Missing-data PCR and regularized regression for the prepared proxy matrix."""
 
 from __future__ import annotations
 

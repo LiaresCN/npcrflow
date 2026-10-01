@@ -52,7 +52,11 @@ def main() -> None:
         ),
         reconstruction=ReconstructionConfig(
             calibration_period=(1940, 2000),
-            interpolation="none",
+            interpolation="archive_linear",
+            interpolation_archives=("Wood", "Coral"),
+            interpolation_max_gap_years=2,
+            interpolation_max_resolution_years=2.0,
+            retain_longest_annual_segment=True,
             regression="ridge",
             validation_block_years=15,
             n_bootstrap=50,

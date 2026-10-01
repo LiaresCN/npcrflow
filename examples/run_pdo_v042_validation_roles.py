@@ -18,6 +18,8 @@ def main() -> None:
         config,
         reconstruction=replace(
             config.reconstruction,
+            interpolation="none",
+            retain_longest_annual_segment=False,
             n_bootstrap=0,
             external_validation_fraction=1.0 / 3.0,
             full_network_outer_validation=True,

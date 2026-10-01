@@ -37,6 +37,7 @@ class ReconstructionResult:
     model_selection: pd.DataFrame
     proxy_weights: pd.DataFrame
     availability: pd.DataFrame
+    interpolation_audit: pd.DataFrame
     low_frequency_constraints: pd.DataFrame
     low_frequency_observations: pd.DataFrame
     multiresolution_selection: pd.DataFrame
@@ -51,13 +52,44 @@ def _months_from_screening(screening: pd.DataFrame) -> dict[str, tuple[int, ...]
     return result
 
 
+def _interpolate_short_interior_gaps(
+    series: pd.Series,
+    maximum_gap_years: int,
+) -> tuple[pd.Series, pd.Series]:
+    """Linearly fill complete bounded gaps no longer than the declared limit."""
+
+    result = series.copy()
+    interpolated = pd.Series(False, index=series.index, dtype=bool)
+    missing = series.isna().to_numpy(bool)
+    candidate = series.interpolate(method="linear", limit_area="inside")
+    position = 0
+    while position < len(series):
+        if not missing[position]:
+            position += 1
+            continue
+        end = position
+        while end + 1 < len(series) and missing[end + 1]:
+            end += 1
+        gap_length = end - position + 1
+        bounded = position > 0 and end + 1 < len(series)
+        if bounded and gap_length <= maximum_gap_years:
+            locations = series.index[position : end + 1]
+            result.loc[locations] = candidate.loc[locations]
+            interpolated.loc[locations] = True
+        position = end + 1
+    return result, interpolated
+
+
 def build_proxy_matrix(
     records: Mapping[str, ProxyRecord],
     pids: Sequence[str],
     screening_config: ScreeningConfig,
     screening: pd.DataFrame | None = None,
     reconstruction_period: tuple[int | None, int | None] | None = None,
-    interpolation: str = "none",
+    interpolation: str = "archive_linear",
+    interpolation_archives: Sequence[str] = ("Wood", "Coral"),
+    interpolation_max_gap_years: int = 2,
+    interpolation_max_resolution_years: float = 2.0,
 ) -> pd.DataFrame:
     month_lookup = _months_from_screening(screening if screening is not None else pd.DataFrame())
     series: dict[str, pd.Series] = {}
@@ -81,6 +113,38 @@ def build_proxy_matrix(
         end = automatic_end if requested_end is None else requested_end
     years = pd.Index(np.arange(start, end + 1), name="Year")
     matrix = pd.DataFrame({pid: item.reindex(years) for pid, item in series.items()}, index=years)
+    native_observed = matrix.notna()
+    interpolated_mask = pd.DataFrame(False, index=years, columns=matrix.columns)
+    allowed_archives = {str(name).strip().casefold() for name in interpolation_archives}
+    audit_rows: list[dict[str, object]] = []
+    if interpolation not in {"none", "archive_linear"}:
+        raise ValueError("interpolation must be 'none' or 'archive_linear'")
+    for pid in matrix.columns:
+        record = records[pid]
+        archive_allowed = record.archive.strip().casefold() in allowed_archives
+        resolution_allowed = (
+            np.isfinite(record.resolution)
+            and record.resolution <= interpolation_max_resolution_years
+        )
+        eligible = interpolation == "archive_linear" and archive_allowed and resolution_allowed
+        if eligible:
+            matrix[pid], interpolated_mask[pid] = _interpolate_short_interior_gaps(
+                matrix[pid], interpolation_max_gap_years
+            )
+        audit_rows.append(
+            {
+                "pid": pid,
+                "archive": record.archive,
+                "native_resolution_years": record.resolution,
+                "interpolation_method": "linear" if eligible else "none",
+                "eligible_archive": archive_allowed,
+                "eligible_resolution": resolution_allowed,
+                "native_observation_count": int(native_observed[pid].sum()),
+                "interpolated_year_count": int(interpolated_mask[pid].sum()),
+                "maximum_gap_years": interpolation_max_gap_years if eligible else 0,
+                "endpoint_extrapolation": False,
+            }
+        )
     matrix.attrs["proxy_metadata"] = {
         pid: {
             "lat": records[pid].lat,
@@ -95,8 +159,9 @@ def build_proxy_matrix(
         }
         for pid in pids
     }
-    if interpolation != "none":
-        raise ValueError("proxy interpolation is disabled; native missing values must be retained")
+    matrix.attrs["native_observed_mask"] = native_observed
+    matrix.attrs["interpolated_mask"] = interpolated_mask
+    matrix.attrs["interpolation_audit"] = pd.DataFrame(audit_rows)
     return matrix
 
 
@@ -108,10 +173,10 @@ def split_resolution_roles(
 ) -> tuple[list[str], list[str]]:
     """Route usable sub-decadal records to PCR and slower records to low-pass.
 
-    Records at or below ``regression_max_resolution_years`` retain their
-    native missing years in the PCR matrix; they are never interpolated. Only
-    records slower than that declared limit are reserved for the low-frequency
-    observation operator.
+    Records at or below ``regression_max_resolution_years`` enter the PCR
+    matrix. Native gaps remain missing except for the separately declared,
+    bounded near-annual archive interpolation policy. Records slower than that
+    limit are reserved for the low-frequency observation operator.
     """
 
     selected = list(pids)
@@ -136,6 +201,18 @@ def _calibration_years(target: pd.Series, config: ReconstructionConfig) -> np.nd
             (years >= config.calibration_period[0]) & (years <= config.calibration_period[1])
         ]
     return years
+
+
+def _longest_contiguous_annual_period(series: pd.Series) -> tuple[int, int]:
+    """Return the longest consecutive annual interval with a finite estimate."""
+
+    years = series.index.to_numpy(int)[np.isfinite(series.to_numpy(float))]
+    if not years.size:
+        raise RuntimeError("the fitted model produced no finite annual reconstruction")
+    boundaries = np.flatnonzero(np.diff(years) != 1) + 1
+    segments = np.split(years, boundaries)
+    longest = sorted(segments, key=lambda item: (-len(item), int(item[0])))[0]
+    return int(longest[0]), int(longest[-1])
 
 
 def _holdout_position(validation: np.ndarray, all_years: np.ndarray) -> str:
@@ -510,6 +587,9 @@ def blocked_pipeline_validation(
                 fold_screening,
                 reconstruction_config.reconstruction_period,
                 reconstruction_config.interpolation,
+                reconstruction_config.interpolation_archives,
+                reconstruction_config.interpolation_max_gap_years,
+                reconstruction_config.interpolation_max_resolution_years,
             )
             model = fit_native_pcr(matrix, target, train, pca_config, reconstruction_config)
             core_prediction = model.predict(matrix)
@@ -779,6 +859,9 @@ def reconstruct(
         screening,
         effective_period,
         reconstruction_config.interpolation,
+        reconstruction_config.interpolation_archives,
+        reconstruction_config.interpolation_max_gap_years,
+        reconstruction_config.interpolation_max_resolution_years,
     )
     calibration_years = _calibration_years(target, reconstruction_config)
     calibration_years = calibration_years[np.isin(calibration_years, matrix.index)]
@@ -938,6 +1021,19 @@ def reconstruct(
             "model_proxy_count": matrix.reindex(columns=model.columns).notna().sum(axis=1),
         }
     )
+    native_observed_mask = matrix.attrs.get(
+        "native_observed_mask",
+        matrix.notna(),
+    ).reindex(index=matrix.index, columns=model.columns, fill_value=False)
+    interpolated_mask = matrix.attrs.get(
+        "interpolated_mask",
+        pd.DataFrame(False, index=matrix.index, columns=matrix.columns),
+    ).reindex(index=matrix.index, columns=model.columns, fill_value=False)
+    availability["native_model_proxy_count"] = native_observed_mask.sum(axis=1)
+    availability["interpolated_model_proxy_count"] = interpolated_mask.sum(axis=1)
+    availability["uses_interpolated_proxy"] = (
+        availability["interpolated_model_proxy_count"] > 0
+    )
     availability["effective_model_proxy_count"] = (
         matrix.reindex(columns=model.columns)
         .notna()
@@ -956,6 +1052,12 @@ def reconstruct(
         ["annual_core", "low_frequency_only"],
         default="unconstrained",
     )
+    if reconstruction_config.retain_longest_annual_segment:
+        output_start, output_end = _longest_contiguous_annual_period(
+            reconstruction["median"]
+        )
+        reconstruction = reconstruction.loc[output_start:output_end]
+        availability = availability.loc[output_start:output_end]
     reconstruction = reconstruction.reset_index()
     return ReconstructionResult(
         reconstruction=reconstruction,
@@ -965,6 +1067,9 @@ def reconstruct(
         model_selection=model.selection_table,
         proxy_weights=model.weight_table,
         availability=availability.reset_index(),
+        interpolation_audit=matrix.attrs.get(
+            "interpolation_audit", pd.DataFrame()
+        ).copy(),
         low_frequency_constraints=low_frequency_constraints,
         low_frequency_observations=low_frequency_observations,
         multiresolution_selection=multiresolution_selection,

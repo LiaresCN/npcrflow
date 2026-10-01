@@ -54,6 +54,8 @@ def main() -> None:
             config,
             reconstruction=replace(
                 config.reconstruction,
+                interpolation="none",
+                retain_longest_annual_segment=False,
                 n_bootstrap=0,
                 amplitude=amplitude,
                 proxy_weights=proxy_weights,

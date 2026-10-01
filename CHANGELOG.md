@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.5.0 — longest continuous annual reconstruction
+
+- Made the final product the longest contiguous interval with a finite annual
+  reconstruction instead of retaining disconnected annual fragments.
+- Added bounded interior linear interpolation for explicitly allowed
+  near-annual archives. The default permits Wood and Coral only, limits gaps
+  to two years, and never extrapolates record endpoints.
+- Kept screening on observed proxy values and retained native timing for ice,
+  speleothem, and other archives.
+- Added `proxy_interpolation_audit.csv` plus native/interpolated availability
+  counts so every filled proxy-year remains identifiable.
+- Retained `interpolation="none"` as an explicit reproducibility and
+  sensitivity option.
+
 ## 0.4.2 — main-result evidence and supplementary robustness
 
 - Restored the WNPSM/PDO interpretation: main-result evidence is the complete
