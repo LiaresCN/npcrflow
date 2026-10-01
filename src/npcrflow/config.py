@@ -290,7 +290,10 @@ class ReconstructionConfig:
     ``interpolation='none'`` is mandatory and never fills a proxy value.
     ``auto_tune=False`` uses
     the first admissible PC count and first configured regularization value;
-    the default performs nested blocked tuning.
+    the default performs nested blocked tuning.  CE and RE thresholds apply
+    only to that internal PCR-model construction.  Outer contiguous-period
+    results are correlation sensitivities and never accept or reject the
+    final full-network reconstruction.
     """
 
     calibration_period: tuple[int, int] | None = None
@@ -313,10 +316,14 @@ class ReconstructionConfig:
     bootstrap_block_years: int = 5
     minimum_bootstrap_success_fraction: float = 0.80
     random_seed: int = 20260926
+    external_validation_fraction: float = 1.0 / 3.0
+    full_network_outer_validation: bool = True
     rescreen_outer_folds: bool = True
     min_ce: float | None = 0.0
     min_re: float | None = 0.0
     skill_floor: float = 0.0
+    # Retained for reading v0.4.1 configurations.  It no longer classifies
+    # outer validation or the final reconstruction.
     strong_skill_threshold: float = 0.5
     auto_tune: bool = True
     amplitude: AmplitudeCalibrationConfig = field(default_factory=AmplitudeCalibrationConfig)
@@ -334,6 +341,8 @@ class ReconstructionConfig:
                 raise ValueError("reconstruction period must be increasing")
         if self.validation_block_years < 2:
             raise ValueError("validation_block_years must be at least 2")
+        if not 0 < self.external_validation_fraction < 0.5:
+            raise ValueError("external_validation_fraction must be between 0 and 0.5")
         if self.n_bootstrap < 0:
             raise ValueError("n_bootstrap cannot be negative")
         if not 0 < self.minimum_bootstrap_success_fraction <= 1:
@@ -387,6 +396,7 @@ class OutputConfig:
     save_metrics: bool = True
     save_proxy_map: bool = True
     save_observation_plot: bool = True
+    show_external_sensitivities: bool = False
     save_nests: bool = False
     figure_format: Literal["png", "pdf", "svg"] = "png"
 

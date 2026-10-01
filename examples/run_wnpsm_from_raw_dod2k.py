@@ -57,10 +57,12 @@ def main() -> None:
             validation_block_years=15,
             n_bootstrap=50,
             bootstrap_block_years=5,
+            external_validation_fraction=1.0 / 3.0,
+            full_network_outer_validation=True,
+            rescreen_outer_folds=True,
             min_ce=0.0,
             min_re=0.0,
             skill_floor=0.0,
-            strong_skill_threshold=0.5,
         ),
         sensitivity=SensitivityConfig(
             split_periods=(

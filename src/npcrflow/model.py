@@ -469,7 +469,7 @@ def fit_native_pcr(
         for n_components in component_candidates
         for alpha in alphas_for(str(regression_name))
     ]
-    if len(structural_grid) == 1 and len(amplitude_options) == 1:
+    if not reconstruction_config.auto_tune:
         regression_name, n_components, alpha = structural_grid[0]
         _, amplitude = amplitude_options[0]
         return _fit_candidate(
@@ -557,6 +557,19 @@ def fit_native_pcr(
         minimum_ce = float(metrics["ce"].min())
         minimum_re = float(metrics["re"].min())
         minimum_skill = min(minimum_ce, minimum_re)
+        ce_threshold = (
+            reconstruction_config.skill_floor
+            if reconstruction_config.min_ce is None
+            else reconstruction_config.min_ce
+        )
+        re_threshold = (
+            reconstruction_config.skill_floor
+            if reconstruction_config.min_re is None
+            else reconstruction_config.min_re
+        )
+        passes_internal_ce_re = bool(
+            median_ce >= ce_threshold and median_re >= re_threshold
+        )
         median_sd_ratio = float(metrics["sd_ratio"].median())
         sd_ratio_error = abs(np.log(max(median_sd_ratio, 1e-12)))
         return {
@@ -591,9 +604,11 @@ def fit_native_pcr(
             "median_amplitude_slope": float(metrics["amplitude_slope"].median()),
             "robust_skill": robust_skill,
             "minimum_skill": minimum_skill,
-            "passes_skill_floor": bool(
-                minimum_skill >= reconstruction_config.skill_floor
-            ),
+            "internal_ce_threshold": ce_threshold,
+            "internal_re_threshold": re_threshold,
+            "passes_internal_ce_re": passes_internal_ce_re,
+            # Backward-compatible column name retained for v0.4.1 readers.
+            "passes_skill_floor": passes_internal_ce_re,
             # Kept as an audit diagnostic. It is intentionally excluded from
             # structural selection so amplitude cannot change PC count.
             "sd_ratio_error": sd_ratio_error,

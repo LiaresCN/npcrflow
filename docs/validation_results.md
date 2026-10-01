@@ -1,5 +1,14 @@
 # Validation status
 
+> **Interpretation update (v0.4.2):** this file preserves engineering results
+> produced through v0.4.1. Continuous holdouts are now supplementary
+> robustness sensitivities, not pass/fail criteria for the main
+> reconstruction. Main-result evidence is the complete screened-network
+> correlation with observations plus CE/RE from internal NPCR construction.
+> The current standard uses only the two directed 2/3-to-1/3 edge tests and no
+> compulsory middle holdout. Older references below to “primary outer
+> validation,” negative CE failure, or three-fold gates are historical.
+
 All scores below compare the reconstruction directly with the instrumental or
 reanalysis observation target. Published reconstructions are not validation
 references. The results distinguish two different questions:
@@ -9,9 +18,26 @@ references. The results distinguish two different questions:
 2. **Selection-aware validation:** does the entire procedure generalize when
    proxy screening is repeated using only each outer fold's training target?
 
-The second question is the primary validation reported by `npcrflow`.
+Through v0.4.1 the second question was treated as the primary engineering
+validation. From v0.4.2 both questions are supplementary robustness tests; the
+main evidence is defined in the update above.
 
 ## PDO
+
+### Version 0.4.2 main evidence and robustness sensitivities
+
+The complete screened-network reconstruction is unchanged from the recommended
+v0.4.1 4-PC result: observed-period `r=0.7781`, effective-DOF
+`p=1.61e-12`, and SD ratio `0.7153`. During internal NPCR construction, the
+selected candidate has median `CE=0.5086` and `RE=0.5168`, above the declared
+zero thresholds. These quantities form the main-result evidence.
+
+The two directed fixed-full-network correlation sensitivities are
+`r=0.7698` for the early third and `r=0.7167` for the late third. Repeating
+proxy screening inside each calibration segment gives `r=0.5605` and
+`r=0.6989`. They are saved for reproducibility and interpreted only as
+supplementary robustness; their CE/RE values do not accept or reject the main
+reconstruction.
 
 The current engineering test starts directly from the global raw Dod2k
 database, uses the **unfiltered** ERSSTv5 PDO target, and restricts the candidate

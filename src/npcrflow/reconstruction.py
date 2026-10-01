@@ -21,6 +21,7 @@ from .records import ProxyCollection, ProxyRecord
 from .screening import screen_proxies
 from .validation import (
     contiguous_folds,
+    directed_edge_folds,
     multiscale_reconstruction_metrics,
     reconstruction_metrics,
     spectral_reconstruction_metrics,
@@ -324,10 +325,17 @@ def blocked_validation(
     reconstruction_config: ReconstructionConfig,
     low_resolution_records: Sequence[ProxyRecord] = (),
 ) -> pd.DataFrame:
+    """Contiguous sensitivity with the complete screened proxy grid fixed.
+
+    Proxy membership and selected seasons come from the full screening step;
+    PCA and regression are still refitted without each held-out block.  This
+    intentionally conditional experiment complements, rather than replaces,
+    the stricter fold-rescreened sensitivity.
+    """
     years = _calibration_years(target, reconstruction_config)
-    folds = contiguous_folds(
+    folds = directed_edge_folds(
         years,
-        reconstruction_config.validation_block_years,
+        reconstruction_config.external_validation_fraction,
         minimum_train_years=max(20, pca_config.max_components + 3),
     )
     rows: list[dict[str, object]] = []
@@ -426,6 +434,9 @@ def blocked_validation(
                 )
             metrics.update(
                 {
+                    "validation_role": "sensitivity_only",
+                    "validation_mode": "full_proxy_network",
+                    "assessment_metric": "correlation",
                     "fold": fold_number,
                     "validation_start": int(validation.min()),
                     "validation_end": int(validation.max()),
@@ -445,6 +456,10 @@ def blocked_validation(
                     "amplitude_reference_min_proxy_count": model.amplitude_calibrator.reference_min_proxy_count,
                     "amplitude_slope": model.amplitude_calibrator.slope,
                     "amplitude_intercept": model.amplitude_calibrator.intercept,
+                    "selected_proxy_count": len(matrix.columns),
+                    "model_proxy_count": len(model.columns),
+                    "pids": "|".join(map(str, matrix.columns)),
+                    "screening_refit": False,
                 }
             )
             rows.append(metrics)
@@ -460,12 +475,12 @@ def blocked_pipeline_validation(
     pca_config: PCAConfig,
     reconstruction_config: ReconstructionConfig,
 ) -> pd.DataFrame:
-    """Outer validation that repeats target-based proxy screening in each fold."""
+    """Contiguous sensitivity that repeats proxy screening in each fold."""
 
     years = _calibration_years(target, reconstruction_config)
-    folds = contiguous_folds(
+    folds = directed_edge_folds(
         years,
-        reconstruction_config.validation_block_years,
+        reconstruction_config.external_validation_fraction,
         minimum_train_years=max(20, pca_config.max_components + 3),
     )
     rows: list[dict[str, object]] = []
@@ -583,6 +598,9 @@ def blocked_pipeline_validation(
                 )
             metrics.update(
                 {
+                    "validation_role": "sensitivity_only",
+                    "validation_mode": "rescreened_network",
+                    "assessment_metric": "correlation",
                     "fold": fold_number,
                     "validation_start": int(validation.min()),
                     "validation_end": int(validation.max()),
@@ -629,6 +647,99 @@ def _moving_block_sample(years: np.ndarray, block: int, rng: np.random.Generator
         start = int(rng.integers(0, len(years) - block + 1))
         samples.extend(years[start : start + block].tolist())
     return np.asarray(samples[: len(years)], dtype=int)
+
+
+def summarize_external_sensitivities(
+    fold_table: pd.DataFrame,
+    reconstruction_config: ReconstructionConfig,
+) -> pd.DataFrame:
+    """Summarize contiguous holdouts without judging the final reconstruction.
+
+    Correlation is the declared external assessment metric.  CE, RE, error,
+    amplitude, and spectral fields remain in the audit output for context, but
+    no pass/fail or strong/weak class is derived from them.
+    """
+
+    if fold_table.empty:
+        return pd.DataFrame(
+            columns=(
+                "validation_role", "validation_mode", "assessment_metric",
+                "fold_count", "median_r", "minimum_r", "maximum_r",
+            )
+        )
+    if "validation_mode" in fold_table:
+        groups = fold_table.groupby("validation_mode", sort=False, dropna=False)
+    else:
+        groups = (("unspecified", fold_table),)
+    summaries: list[dict[str, object]] = []
+    for mode, table in groups:
+        summary: dict[str, object] = {
+            "validation_role": "sensitivity_only",
+            "validation_mode": str(mode),
+            "assessment_metric": "correlation",
+            "ce_re_role": "reported_not_used_for_external_judgment",
+            "fold_count": len(table),
+        }
+        for metric in (
+            "r", "p_effective", "n_eff", "rmse", "re", "ce",
+            "sd_ratio", "variance_ratio",
+        ):
+            values = pd.to_numeric(
+                table.get(metric, pd.Series(dtype=float)), errors="coerce"
+            ).dropna()
+            summary[f"median_{metric}"] = float(values.median()) if not values.empty else np.nan
+            summary[f"mean_{metric}"] = float(values.mean()) if not values.empty else np.nan
+            summary[f"minimum_{metric}"] = float(values.min()) if not values.empty else np.nan
+            summary[f"maximum_{metric}"] = float(values.max()) if not values.empty else np.nan
+            summary[f"q05_{metric}"] = float(values.quantile(0.05)) if not values.empty else np.nan
+            summary[f"q95_{metric}"] = float(values.quantile(0.95)) if not values.empty else np.nan
+            core_metric = f"core_{metric}"
+            if core_metric in table:
+                core_values = pd.to_numeric(table[core_metric], errors="coerce").dropna()
+                summary[f"median_{core_metric}"] = (
+                    float(core_values.median()) if not core_values.empty else np.nan
+                )
+            raw_metric = f"raw_{metric}"
+            if raw_metric in table:
+                raw_values = pd.to_numeric(table[raw_metric], errors="coerce").dropna()
+                summary[f"median_{raw_metric}"] = (
+                    float(raw_values.median()) if not raw_values.empty else np.nan
+                )
+        for period in reconstruction_config.evaluation_lowpass_periods:
+            label = f"{float(period):g}".replace(".", "p")
+            for metric in ("r", "sd_ratio", "variance_ratio", "rmse", "re", "ce"):
+                name = f"lowpass_{label}y_{metric}"
+                values = pd.to_numeric(
+                    table.get(name, pd.Series(dtype=float)), errors="coerce"
+                ).dropna()
+                summary[f"median_{name}"] = float(values.median()) if not values.empty else np.nan
+                summary[f"q05_{name}"] = float(values.quantile(0.05)) if not values.empty else np.nan
+                summary[f"q95_{name}"] = float(values.quantile(0.95)) if not values.empty else np.nan
+                core_name = f"core_{name}"
+                if core_name in table:
+                    core_values = pd.to_numeric(table[core_name], errors="coerce").dropna()
+                    summary[f"median_{core_name}"] = (
+                        float(core_values.median()) if not core_values.empty else np.nan
+                    )
+        for column in table.columns:
+            if not column.startswith("spectral_"):
+                continue
+            values = pd.to_numeric(table[column], errors="coerce").dropna()
+            summary[f"median_{column}"] = float(values.median()) if not values.empty else np.nan
+            summary[f"q05_{column}"] = float(values.quantile(0.05)) if not values.empty else np.nan
+            summary[f"q95_{column}"] = float(values.quantile(0.95)) if not values.empty else np.nan
+        if "holdout_position" in table:
+            for position in ("early", "late"):
+                edge = table.loc[table["holdout_position"] == position]
+                for metric in ("r", "p_effective", "rmse", "re", "ce"):
+                    values = pd.to_numeric(
+                        edge.get(metric, pd.Series(dtype=float)), errors="coerce"
+                    ).dropna()
+                    summary[f"{position}_holdout_{metric}"] = (
+                        float(values.median()) if not values.empty else np.nan
+                    )
+        summaries.append(summary)
+    return pd.DataFrame(summaries)
 
 
 def reconstruct(
@@ -689,112 +800,36 @@ def reconstruct(
             alpha=model.alpha,
             regression_name=model.regression_name,
         )
-    if reconstruction_config.rescreen_outer_folds:
-        fold_table = blocked_pipeline_validation(
-            records,
-            target,
-            screening_config,
-            pca_config,
-            reconstruction_config,
-        )
-    else:
-        fold_table = blocked_validation(
+    validation_tables: list[pd.DataFrame] = []
+    if reconstruction_config.full_network_outer_validation:
+        validation_tables.append(blocked_validation(
             matrix,
             target,
             pca_config,
             reconstruction_config,
             low_resolution_records=low_resolution_records,
-        )
-    summary: dict[str, object] = {"fold_count": len(fold_table)}
-    for metric in ("r", "rmse", "re", "ce", "sd_ratio", "variance_ratio"):
-        values = pd.to_numeric(fold_table.get(metric, pd.Series(dtype=float)), errors="coerce").dropna()
-        summary[f"median_{metric}"] = float(values.median()) if not values.empty else np.nan
-        summary[f"mean_{metric}"] = float(values.mean()) if not values.empty else np.nan
-        summary[f"minimum_{metric}"] = float(values.min()) if not values.empty else np.nan
-        summary[f"maximum_{metric}"] = float(values.max()) if not values.empty else np.nan
-        summary[f"q05_{metric}"] = float(values.quantile(0.05)) if not values.empty else np.nan
-        summary[f"q95_{metric}"] = float(values.quantile(0.95)) if not values.empty else np.nan
-        core_metric = f"core_{metric}"
-        if core_metric in fold_table:
-            core_values = pd.to_numeric(fold_table[core_metric], errors="coerce").dropna()
-            summary[f"median_{core_metric}"] = (
-                float(core_values.median()) if not core_values.empty else np.nan
-            )
-        raw_metric = f"raw_{metric}"
-        if raw_metric in fold_table:
-            raw_values = pd.to_numeric(fold_table[raw_metric], errors="coerce").dropna()
-            summary[f"median_{raw_metric}"] = (
-                float(raw_values.median()) if not raw_values.empty else np.nan
-            )
-    for period in reconstruction_config.evaluation_lowpass_periods:
-        label = f"{float(period):g}".replace(".", "p")
-        for metric in ("r", "sd_ratio", "variance_ratio", "rmse", "re", "ce"):
-            name = f"lowpass_{label}y_{metric}"
-            values = pd.to_numeric(
-                fold_table.get(name, pd.Series(dtype=float)), errors="coerce"
-            ).dropna()
-            summary[f"median_{name}"] = float(values.median()) if not values.empty else np.nan
-            summary[f"q05_{name}"] = float(values.quantile(0.05)) if not values.empty else np.nan
-            summary[f"q95_{name}"] = float(values.quantile(0.95)) if not values.empty else np.nan
-            core_name = f"core_{name}"
-            if core_name in fold_table:
-                core_values = pd.to_numeric(fold_table[core_name], errors="coerce").dropna()
-                summary[f"median_{core_name}"] = (
-                    float(core_values.median()) if not core_values.empty else np.nan
-                )
-    for column in fold_table.columns:
-        if not column.startswith("spectral_"):
-            continue
-        values = pd.to_numeric(fold_table[column], errors="coerce").dropna()
-        summary[f"median_{column}"] = float(values.median()) if not values.empty else np.nan
-        summary[f"q05_{column}"] = float(values.quantile(0.05)) if not values.empty else np.nan
-        summary[f"q95_{column}"] = float(values.quantile(0.95)) if not values.empty else np.nan
-        core_column = f"core_{column}"
-        if core_column in fold_table:
-            core_values = pd.to_numeric(fold_table[core_column], errors="coerce").dropna()
-            summary[f"median_{core_column}"] = (
-                float(core_values.median()) if not core_values.empty else np.nan
-            )
-    if "holdout_position" in fold_table:
-        for position in ("early", "late"):
-            edge = fold_table.loc[fold_table["holdout_position"] == position]
-            for metric in ("r", "rmse", "re", "ce"):
-                values = pd.to_numeric(edge.get(metric, pd.Series(dtype=float)), errors="coerce").dropna()
-                summary[f"{position}_holdout_{metric}"] = (
-                    float(values.median()) if not values.empty else np.nan
-                )
-    ce_pass = reconstruction_config.min_ce is None or (
-        np.isfinite(summary["minimum_ce"])
-        and summary["minimum_ce"] >= reconstruction_config.min_ce
+        ))
+    if reconstruction_config.rescreen_outer_folds:
+        validation_tables.append(blocked_pipeline_validation(
+            records,
+            target,
+            screening_config,
+            pca_config,
+            reconstruction_config,
+        ))
+    nonempty_validation = [
+        table.dropna(axis=1, how="all")
+        for table in validation_tables
+        if not table.empty
+    ]
+    fold_table = (
+        pd.concat(nonempty_validation, ignore_index=True, sort=False)
+        if nonempty_validation
+        else pd.DataFrame()
     )
-    re_pass = reconstruction_config.min_re is None or (
-        np.isfinite(summary["minimum_re"])
-        and summary["minimum_re"] >= reconstruction_config.min_re
+    validation_summary = summarize_external_sensitivities(
+        fold_table, reconstruction_config
     )
-    summary["ce_threshold"] = reconstruction_config.min_ce
-    summary["re_threshold"] = reconstruction_config.min_re
-    summary["skill_gate_passed"] = bool(ce_pass and re_pass)
-    strong = reconstruction_config.strong_skill_threshold
-    strong_pass = bool(
-        np.isfinite(summary["minimum_ce"])
-        and np.isfinite(summary["minimum_re"])
-        and summary["minimum_ce"] >= strong
-        and summary["minimum_re"] >= strong
-    )
-    summary["strong_skill_threshold"] = strong
-    summary["strong_skill_passed"] = strong_pass
-    positive_skill = bool(
-        np.isfinite(summary["minimum_ce"])
-        and np.isfinite(summary["minimum_re"])
-        and summary["minimum_ce"] >= 0.0
-        and summary["minimum_re"] >= 0.0
-    )
-    if not positive_skill:
-        summary["skill_class"] = "negative"
-    elif strong_pass:
-        summary["skill_class"] = "strong"
-    else:
-        summary["skill_class"] = "positive"
 
     rng = np.random.default_rng(reconstruction_config.random_seed)
     ensemble: list[np.ndarray] = []
@@ -926,7 +961,7 @@ def reconstruct(
         reconstruction=reconstruction,
         model=model,
         validation_folds=fold_table,
-        validation_summary=pd.DataFrame([summary]),
+        validation_summary=validation_summary,
         model_selection=model.selection_table,
         proxy_weights=model.weight_table,
         availability=availability.reset_index(),

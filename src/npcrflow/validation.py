@@ -246,6 +246,35 @@ def contiguous_folds(
     return folds
 
 
+def directed_edge_folds(
+    years: Iterable[int],
+    validation_fraction: float = 1.0 / 3.0,
+    *,
+    minimum_train_years: int = 20,
+) -> list[tuple[np.ndarray, np.ndarray]]:
+    """Return only the two directed 2/3-to-1/3 edge sensitivities.
+
+    The first fold calibrates on the later two thirds and withholds the early
+    third; the second calibrates on the early two thirds and withholds the late
+    third.  There is deliberately no middle-block holdout.
+    """
+
+    unique = np.asarray(sorted(set(int(year) for year in years)), dtype=int)
+    if not 0 < validation_fraction < 0.5:
+        raise ValueError("validation_fraction must be between 0 and 0.5")
+    if unique.size < minimum_train_years + 2:
+        return []
+    count = max(2, int(np.ceil(unique.size * validation_fraction)))
+    if unique.size - count < minimum_train_years:
+        return []
+    early_validation = unique[:count]
+    late_validation = unique[-count:]
+    return [
+        (unique[count:], early_validation),
+        (unique[:-count], late_validation),
+    ]
+
+
 def summarize_fold_metrics(frame: pd.DataFrame) -> dict[str, float]:
     if frame.empty:
         return {}

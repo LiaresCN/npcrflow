@@ -71,11 +71,12 @@
     "bootstrap_block_years": 5,
     "minimum_bootstrap_success_fraction": 0.8,
     "random_seed": 20260926,
+    "external_validation_fraction": 0.3333333333333333,
+    "full_network_outer_validation": true,
     "rescreen_outer_folds": true,
     "min_ce": 0.0,
     "min_re": 0.0,
     "skill_floor": 0.0,
-    "strong_skill_threshold": 0.5,
     "auto_tune": true,
     "amplitude": {
       "method": "auto",
@@ -132,6 +133,7 @@
     "save_metrics": true,
     "save_proxy_map": true,
     "save_observation_plot": true,
+    "show_external_sensitivities": false,
     "save_nests": false,
     "figure_format": "png"
   }

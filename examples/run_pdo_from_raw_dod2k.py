@@ -98,18 +98,19 @@ def build_config(
             random_forest_max_features=1.0,
             evaluation_lowpass_periods=(10.0, 20.0),
             evaluation_period_bands=((10.0, 30.0),),
-            # 1900–2000 contains 101 years. A 34-year block yields three
-            # contiguous outer folds, each withholding about one third.
+            # Internal NPCR model selection uses blocked CE/RE. External
+            # robustness uses only the two directed 2/3-to-1/3 edge splits.
             validation_block_years=34,
             n_bootstrap=50,
             bootstrap_block_years=5,
             minimum_bootstrap_success_fraction=0.80,
             random_seed=20260926,
+            external_validation_fraction=1.0 / 3.0,
+            full_network_outer_validation=True,
             rescreen_outer_folds=True,
             min_ce=0.0,
             min_re=0.0,
             skill_floor=0.0,
-            strong_skill_threshold=0.5,
             auto_tune=True,
             amplitude=AmplitudeCalibrationConfig(
                 method=amplitude_method,

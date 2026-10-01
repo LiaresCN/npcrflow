@@ -12,14 +12,14 @@ files live under this project.
 ## Installation
 
 ```bash
-python -m pip install git+https://github.com/LiaresCN/npcrflow.git@v0.4.1
+python -m pip install git+https://github.com/LiaresCN/npcrflow.git@v0.4.2
 ```
 
 For an offline MEL installation, use the release wheel without modifying the
 source environment:
 
 ```bash
-python -m pip install /path/to/npcrflow-0.4.1-py3-none-any.whl
+python -m pip install /path/to/npcrflow-0.4.2-py3-none-any.whl
 ```
 
 ## Minimal use
@@ -149,17 +149,18 @@ Create the audited Dod2k copy with:
   all candidate proxy records. Archive-specific caps are also configurable;
   candidates within a capped archive are ranked by adjusted p value, absolute
   correlation, effective sample size, and stable proxy ID.
-- Proxy screening, PCA, scaling, regression, and hyperparameter selection are
-  refit inside each outer contiguous validation fold. Random individual-year
-  train/test splits are not used. `rescreen_outer_folds=False` exists only for
-  controlled conditional-on-network comparisons with historical results.
-- Contiguous outer validation includes both the earliest and latest blocks as
-  well as intervening blocks. `validation_folds.csv` labels them `early`,
-  `middle`, and `late`; the summary reports the early- and late-edge scores
-  separately. The PDO example uses three contiguous folds, holding out about
-  one third of 1900–2000 at a time and calibrating on the remaining two thirds.
-  Two additional edge tests use the early two thirds to predict the late third,
-  then use the late two thirds to predict the early third.
+- The final reconstruction always uses the complete proxy grid that passes the
+  declared effective-DOF significance and absolute-correlation thresholds.
+  Continuous holdouts are supplementary robustness sensitivities, not gates
+  that accept or reject this main result.
+- Two directed segment sensitivities are provided: later two thirds calibrate
+  the withheld early third, and early two thirds calibrate the withheld late
+  third. There is no compulsory middle holdout. Each direction is calculated
+  both with the complete screened proxy grid fixed (`full_proxy_network`) and,
+  when enabled, with target-based proxy screening repeated inside the training
+  period (`rescreened_network`). Their declared assessment metric is
+  correlation; CE/RE remain available in the audit table but do not classify
+  the main reconstruction.
 - Standard paleoclimate definitions are used: RE is referenced to the
   calibration mean and CE to the validation mean.  CE is never randomized.
 - Ridge is the conservative fixed regression because it stabilizes correlated
@@ -170,12 +171,12 @@ Create the audited Dod2k copy with:
   and contiguous-block validation path, but its bounded extrapolation is a
   known limitation; it is retained only if held-out evidence beats the linear
   baselines.
-- CE/RE are not manually nudged using the final validation blocks. PC count and
-  regularization are chosen inside the training data by a blocked-validation
-  objective that prioritizes the smaller of median CE and RE. By default,
-  `CE >= 0` and `RE >= 0` are the minimum skill gate; both values at or above
-  0.5 are additionally labelled `strong`. These levels can be configured, but
-  an untouched outer validation result must not be fed back into tuning.
+- CE/RE are used only during internal NPCR model construction, analogous to
+  the regression screening within the former WNPSM NEST loop. PC count,
+  regression, regularization, and amplitude candidates are judged by their
+  inner-fold median CE and RE against configurable `min_ce`/`min_re` values
+  (normally 0 or 0.05). External segment sensitivities never change those
+  choices or label the full reconstruction as failed.
 - Amplitude calibration is explicit and off by default. `ols` estimates a
   training-only affine map; `variance` matches the training-period mean and
   standard deviation either to the observation or to the densest eligible
@@ -243,21 +244,29 @@ and overfits the current PDO network; the revised default keeps four PCs,
 restores apparent `r=0.778`, and gives outer-block correlations
 `0.561/0.559/0.697` with positive CE in every block.
 
+Version 0.4.2 restores the interpretation used by the WNPSM/PDO workflow. Main
+result evidence is the full-network reconstruction's correlation with the
+observed target plus CE/RE from internal NPCR model construction. Continuous
+segment tests are supplementary only, use the two directed 2/3-to-1/3 edge
+splits, and report both fixed-full-grid and fold-rescreened networks. They no
+longer produce a pass/fail or `strong` classification for the main result.
+
 ## Compact outputs
 
 Depending on the enabled options, a run writes `source_qc.csv`, `proxy_screening.csv`,
-`reconstruction.csv`, `observation_fit.csv`, `validation_folds.csv`, `validation_summary.csv`,
+`reconstruction.csv`, `observation_fit.csv`, `primary_reconstruction_summary.csv`,
+`validation_folds.csv`, `validation_summary.csv`,
 `model_selection.csv`, `proxy_availability.csv`, sensitivity summaries, one
 proxy map, one observation diagnostic figure, and `manifest.json`. The manifest contains input hashes and the full
 configuration.  `save_nests` defaults to false and no implementation path saves
 nest ensembles.
 
-`observation_fit.csv` and the upper panel of `observation_comparison.png` are
-explicitly labelled as apparent calibration fit because the observations were
-used to train the final model. Independent performance is the outer-fold
-`validation_folds.csv`/`validation_summary.csv`, whose predictions are compared
-only with withheld observations. Published reconstructions are not used as the
-validation reference.
+`primary_reconstruction_summary.csv` puts the declared main-result evidence in
+one row: the full reconstruction's correlation with observations and the
+selected internal NPCR candidate's median CE/RE. `validation_folds.csv` and
+the mode-specific `validation_full_proxy_network.csv` and
+`validation_rescreened_network.csv` are supplementary robustness results.
+Published reconstructions are not used as the validation reference.
 
 Both apparent and outer-fold tables report configured low-pass diagnostics
 (10 and 20 years in the PDO template). These compare filtered observations with
@@ -291,10 +300,13 @@ constraints and is never expanded into three synthetic annual observations.
 Each enabled network sensitivity writes both its repeat-level table and a
 compact `*_summary.csv` containing the minimum, 5/25/50/75/95th percentiles,
 and maximum of the applicable correlation, RMSE, RE, and CE metrics.
-The primary `validation_summary.csv` likewise reports fold means, minima,
-maxima, medians, and 5–95% ranges; its CE/RE gate now requires every outer fold
-to pass, rather than allowing a negative middle fold to hide behind a positive
-median. Low-frequency runs also report median `core_*` scores before adjustment.
+`validation_summary.csv` reports the two directed external correlation
+sensitivities by network mode. CE/RE and error fields remain available only as
+context; there is no external gate or main-result class. Whether to display a
+sensitivity in a paper is a reporting choice, while its saved audit result is
+kept reproducible. `show_external_sensitivities=False` leaves these tests out
+of the main observation figure by default. Low-frequency runs also report
+`core_*` diagnostics before adjustment.
 
 ## Current verification
 
@@ -310,11 +322,10 @@ associated Slurm launcher is `scripts/run_pdo_raw_dod2k.slurm`. The older
 `run_pdo_validation.py` name is retained only as a compatibility entry point to
 the same raw-input workflow.
 
-The current PDO engineering test uses the unfiltered observed PDO, only `d18O`
-from the four requested archives, three contiguous one-third holdouts with
-outer-fold re-screening, and both edge directions of the two-thirds/one-third
-split. The core model has positive CE and RE in every fold and under random
-20% proxy deletion. The experimental low-frequency adjustment is reported
-separately because it fails the same edge tests. See
+The current PDO engineering test uses the unfiltered observed PDO and only
+`d18O` from the four requested archives. Main evidence comes from the complete
+screened-network correlation and internal NPCR CE/RE. Directed segment tests,
+single-proxy reconstructions, random proxy deletion, and alternate network
+treatments are reported separately as robustness sensitivities. See
 [`docs/validation_results.md`](docs/validation_results.md) before interpreting
 or publishing a reconstruction.

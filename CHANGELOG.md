@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.4.2 — main-result evidence and supplementary robustness
+
+- Restored the WNPSM/PDO interpretation: main-result evidence is the complete
+  screened-network correlation with observations plus median CE/RE from
+  internal NPCR construction.
+- Moved contiguous segment tests to supplementary sensitivity status. They no
+  longer create pass/fail or strong/weak labels for the main reconstruction.
+- Replaced compulsory early/middle/late holdouts with two directed edge tests:
+  later 2/3 to early 1/3 and early 2/3 to late 1/3.
+- Added both fixed-full-proxy-grid and fold-rescreened variants, with
+  correlation as the declared external assessment metric.
+- Added `primary_reconstruction_summary.csv` and separate validation-mode CSVs.
+- Changed internal CE/RE thresholding from the worst inner fold to the
+  WNPSM-like median inner-fold CE and RE; thresholds remain configurable.
+
 ## 0.4.1 — two-stage PCA/amplitude selection
 
 - Restored an exact configurable Kaiser (`eigenvalue > threshold`) mode and

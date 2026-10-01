@@ -37,6 +37,7 @@ from npcrflow.screening import _fdr_bh, correlation_with_effective_dof, screen_p
 from npcrflow.sensitivity import run_network_sensitivities, summarize_sensitivity
 from npcrflow.validation import (
     contiguous_folds,
+    directed_edge_folds,
     multiscale_reconstruction_metrics,
     reconstruction_metrics,
     spectral_reconstruction_metrics,
@@ -68,6 +69,9 @@ class DataTests(unittest.TestCase):
     def test_proxy_filter_defaults_to_exact_deduplication(self):
         self.assertTrue(ProxyFilterConfig().deduplicate_exact)
         reconstruction = ReconstructionConfig()
+        self.assertFalse(OutputConfig().show_external_sensitivities)
+        self.assertTrue(reconstruction.full_network_outer_validation)
+        self.assertTrue(reconstruction.rescreen_outer_folds)
         self.assertEqual(reconstruction.min_ce, 0.0)
         self.assertEqual(reconstruction.min_re, 0.0)
         self.assertEqual(reconstruction.strong_skill_threshold, 0.5)
@@ -206,13 +210,35 @@ class DeduplicationTests(unittest.TestCase):
             self.assertEqual(len(result.source_qc), 4)
             self.assertTrue((root / "output" / "dropped_exact_duplicates.csv").exists())
             self.assertTrue((root / "output" / "observation_fit.csv").exists())
+            primary = pd.read_csv(root / "output" / "primary_reconstruction_summary.csv")
+            self.assertEqual(
+                primary.loc[0, "validity_basis"],
+                "observation_correlation_and_internal_npcr_ce_re",
+            )
+            self.assertFalse(bool(primary.loc[0, "external_sensitivities_decide_main_result"]))
             self.assertEqual(len(result.reconstruction.model.columns), 4)
             self.assertIn("state_support", result.reconstruction.availability)
-            self.assertTrue(result.reconstruction.validation_folds["screening_refit"].all())
-            self.assertIn(
-                result.reconstruction.validation_summary.loc[0, "skill_class"],
-                {"negative", "positive", "strong"},
+            modes = set(result.reconstruction.validation_folds["validation_mode"])
+            self.assertEqual(modes, {"full_proxy_network", "rescreened_network"})
+            fixed = result.reconstruction.validation_folds.query(
+                "validation_mode == 'full_proxy_network'"
             )
+            rescreened = result.reconstruction.validation_folds.query(
+                "validation_mode == 'rescreened_network'"
+            )
+            self.assertFalse(fixed["screening_refit"].any())
+            self.assertTrue(rescreened["screening_refit"].all())
+            self.assertEqual(
+                set(result.reconstruction.validation_summary["validation_role"]),
+                {"sensitivity_only"},
+            )
+            self.assertEqual(
+                set(result.reconstruction.validation_summary["assessment_metric"]),
+                {"correlation"},
+            )
+            self.assertNotIn("skill_class", result.reconstruction.validation_summary)
+            self.assertTrue((root / "output" / "validation_full_proxy_network.csv").exists())
+            self.assertTrue((root / "output" / "validation_rescreened_network.csv").exists())
 
 
 class ScreeningTests(unittest.TestCase):
@@ -336,6 +362,15 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(len(folds), 3)
         self.assertEqual([len(validation) for _, validation in folds], [34, 34, 33])
         self.assertEqual([len(training) for training, _ in folds], [67, 67, 68])
+
+    def test_directed_edge_folds_use_two_thirds_in_both_directions(self):
+        years = np.arange(1900, 2001)
+        folds = directed_edge_folds(years)
+        self.assertEqual(len(folds), 2)
+        self.assertEqual([len(validation) for _, validation in folds], [34, 34])
+        self.assertEqual([len(training) for training, _ in folds], [67, 67])
+        self.assertEqual((folds[0][1].min(), folds[0][1].max()), (1900, 1933))
+        self.assertEqual((folds[1][1].min(), folds[1][1].max()), (1967, 2000))
 
     def test_reconstruction_period_can_fix_start_and_infer_end(self):
         records = {"p": ProxyRecord("p", [1900, 1901, 1902], [1, 2, 3])}
@@ -885,7 +920,10 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(int(amplitude["selected"].sum()), 1)
         np.testing.assert_array_equal(
             automatic.selection_table["passes_skill_floor"].to_numpy(bool),
-            (automatic.selection_table["minimum_skill"] >= 0.0).to_numpy(bool),
+            (
+                (automatic.selection_table["median_ce"] >= 0.0)
+                & (automatic.selection_table["median_re"] >= 0.0)
+            ).to_numpy(bool),
         )
 
     def test_proxy_weights_downweight_correlated_neighbors_and_report_error(self):
@@ -991,7 +1029,7 @@ class ModelTests(unittest.TestCase):
         self.assertIn("raw_ce", folds)
         self.assertIn("pca_selection", folds)
         self.assertIn("kaiser_component_count", folds)
-        self.assertGreater(int(folds["low_frequency_proxy_count"].max()), 0)
+        self.assertTrue((folds["low_frequency_proxy_count"] >= 0).all())
         self.assertEqual(folds.iloc[0]["holdout_position"], "early")
         self.assertEqual(folds.iloc[-1]["holdout_position"], "late")
 

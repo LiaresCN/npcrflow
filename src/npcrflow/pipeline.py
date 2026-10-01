@@ -16,7 +16,11 @@ from scipy import signal
 from .config import PipelineConfig, ProxyFilterConfig
 from .data import load_observations, load_proxy_frame, load_proxy_workbook
 from .deduplicate import deduplicate_frame
-from .diagnostics import observation_fit_table, plot_observation_diagnostics
+from .diagnostics import (
+    observation_fit_table,
+    plot_observation_diagnostics,
+    primary_reconstruction_summary,
+)
 from .records import ProxyCollection, ProxyRecord
 from .reconstruction import ReconstructionResult, reconstruct, split_resolution_roles
 from .screening import screen_proxies
@@ -216,6 +220,13 @@ def save_pipeline_result(
         result.source_qc.to_csv(paths["source_qc"], index=False)
         paths["validation"] = output / "validation_folds.csv"
         result.reconstruction.validation_folds.to_csv(paths["validation"], index=False)
+        if "validation_mode" in result.reconstruction.validation_folds:
+            for mode, table in result.reconstruction.validation_folds.groupby(
+                "validation_mode", sort=False
+            ):
+                key = f"validation_{mode}"
+                paths[key] = output / f"validation_{mode}.csv"
+                table.to_csv(paths[key], index=False)
         paths["validation_summary"] = output / "validation_summary.csv"
         result.reconstruction.validation_summary.to_csv(paths["validation_summary"], index=False)
         paths["observation_fit"] = output / "observation_fit.csv"
@@ -224,6 +235,13 @@ def save_pipeline_result(
             result.reconstruction.reconstruction,
             config.reconstruction,
         ).to_csv(paths["observation_fit"], index=False)
+        paths["primary_summary"] = output / "primary_reconstruction_summary.csv"
+        primary_reconstruction_summary(
+            result.target,
+            result.reconstruction.reconstruction,
+            result.reconstruction.model_selection,
+            config.reconstruction,
+        ).to_csv(paths["primary_summary"], index=False)
         paths["model_selection"] = output / "model_selection.csv"
         result.reconstruction.model_selection.to_csv(paths["model_selection"], index=False)
         paths["proxy_weights"] = output / "proxy_weights.csv"
@@ -257,6 +275,7 @@ def save_pipeline_result(
             result.reconstruction.validation_folds,
             config.reconstruction,
             paths["observation_plot"],
+            show_external_sensitivities=config.output.show_external_sensitivities,
         )
     proxy_path = Path(proxy_source)
     observation_path = Path(observation_source)
@@ -310,6 +329,13 @@ def save_pipeline_result(
         "amplitude_slope_knots": result.reconstruction.model.amplitude_calibrator.slope_knots,
         "weighted_proxy_count": float(result.reconstruction.model.proxy_weights.sum()),
         "downweighted_proxy_count": int((result.reconstruction.model.proxy_weights < 1.0).sum()),
+        "external_validation_role": "sensitivity_only",
+        "external_validation_assessment_metric": "correlation",
+        "external_validation_modes": (
+            result.reconstruction.validation_summary["validation_mode"].astype(str).tolist()
+            if "validation_mode" in result.reconstruction.validation_summary
+            else []
+        ),
         "state_timestep_years": config.reconstruction.multiresolution.state_timestep_years,
         "selected_proxy_constraint_weight": selected_proxy_weight,
         "selected_lowpass_period_years": selected_lowpass_period,

@@ -89,9 +89,14 @@ def main() -> None:
         return
     config = load_config(args.config)
     result = run_pipeline(args.proxy_source, args.observation_source, config)
-    summary = result.reconstruction.validation_summary.iloc[0].to_dict()
-    summary["selected_proxy_count"] = int(result.screening["selected"].sum())
-    summary["outputs"] = {name: str(path) for name, path in result.output_paths.items()}
+    summary = {
+        "selected_proxy_count": int(result.screening["selected"].sum()),
+        "external_validation_role": "sensitivity_only",
+        "external_validation": result.reconstruction.validation_summary.to_dict(
+            orient="records"
+        ),
+        "outputs": {name: str(path) for name, path in result.output_paths.items()},
+    }
     print(json.dumps(summary, indent=2, default=str))
 
 

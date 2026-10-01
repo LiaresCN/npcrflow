@@ -128,32 +128,31 @@ Annual values in intervals supported only by low-resolution proxies represent
 a smooth latent low-frequency estimate. They do not contain independently
 resolved annual information and must be labelled accordingly.
 
-When this layer is enabled, every outer validation fold refits the proxy system
-mapping using only that fold's training target, then applies native proxy
-constraints to the held-out block. Reported primary fold RE/CE therefore refer
-to the final adjusted reconstruction; `core_*` columns retain the corresponding
-unadjusted-PCR scores.
+When this layer is enabled, each directed segment sensitivity refits the model
+mapping using its calibration segment, then applies native proxy constraints to
+the withheld third. The fixed-full-network mode retains the complete screened
+grid; the rescreened mode also repeats proxy selection. `core_*` columns retain
+the corresponding unadjusted-PCR diagnostics. These are supplementary results,
+not main-result CE/RE gates.
 
 ## Skill
 
 - `RE = 1 - SSE_validation / sum((y_validation - mean(y_calibration))^2)`
 - `CE = 1 - SSE_validation / sum((y_validation - mean(y_validation))^2)`
 
-The smaller of fold-median RE and CE drives automatic hyperparameter selection
-inside the training data. Non-negative CE and RE are the default minimum skill
-gate. Both at or above 0.5 are reported as strong skill. Thresholds may be set
-before an experiment, but the final outer blocks are not reused to choose them
-or to select parameters.
+The smaller of inner-fold median RE and CE drives automatic model selection
+inside NPCR construction, corresponding to the statistical check formerly
+performed for each WNPSM NEST regression. Configurable `min_ce` and `min_re`
+are normally 0 or 0.05. They do not act on external segment tests.
 
-The final-model calibration fit is reported separately and labelled apparent.
-Independent performance comes from contiguous outer blocks whose observations
-were withheld from proxy screening, PCA, regression, and hyperparameter tuning.
-No published reconstruction is used as the validation target.
-Both edge directions are always represented: one outer fold withholds the
-earliest block and another withholds the latest block. For the PDO engineering
-case, the outer block is approximately one third of the observation interval,
-so about two thirds remain for calibration. Optional split-period tests also
-reverse early-calibration/late-validation into late-calibration/early-validation.
+Main reconstruction evidence consists of the complete screened-network
+correlation with observations plus these internal NPCR CE/RE results. External
+segment experiments supplement robustness only. They use two directions—later
+two thirds to reconstruct the early third, and early two thirds to reconstruct
+the late third—with no compulsory middle holdout. One variant fixes the full
+screened proxy grid; a second refits screening inside each calibration segment.
+Correlation is the declared external metric. No published reconstruction is
+used as a validation target, and no external CE/RE creates a failure label.
 
 ## Regression alternatives
 

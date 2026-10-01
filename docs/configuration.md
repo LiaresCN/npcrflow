@@ -137,12 +137,23 @@ observation-operator audit.
 
 ## Validation, sensitivities, and output
 
-- `rescreen_outer_folds=True` repeats target-based screening inside each
-  contiguous outer fold.
-- `min_ce`, `min_re`, and `strong_skill_threshold` classify results; they do
-  not tune against the outer folds.
+- `min_ce` and `min_re` apply to median CE/RE only during internal NPCR model
+  construction. Values of 0 or 0.05 are typical declared thresholds.
+- `external_validation_fraction` defaults to one third. The external segment
+  sensitivity has only two directions: later 2/3 -> early 1/3 and early 2/3 ->
+  late 1/3; it has no middle holdout and does not classify the main result.
+- `full_network_outer_validation=True` runs the directed sensitivity with the
+  complete proxy grid selected from the full screening period held fixed.
+  `rescreen_outer_folds=True` additionally runs the stricter variant that
+  repeats target-based screening inside each direction's calibration period.
+  Both use correlation as the declared assessment metric.
+- `strong_skill_threshold` remains readable only for v0.4.1 configuration
+  compatibility and no longer creates an external `strong` label.
 - `sensitivity` keeps optional single-proxy, leave-one-proxy-out, directed
   calibration/validation periods, and repeated random network deletion. All
   can remain disabled for a normal full-network reconstruction.
-- `output` controls only compact tables and the two summary figures. Per-NEST
-  files and bootstrap-member files are not saved.
+- `output` controls compact tables and summary figures.
+  `show_external_sensitivities=False` keeps directed holdout correlations out
+  of the main observation figure while retaining their CSV audit; turn it on
+  only when that supplementary panel is wanted. Per-NEST files and
+  bootstrap-member files are not saved.

@@ -6,3 +6,4 @@ dist/
 .coverage
 .pytest_cache/
 results/
+logs/
