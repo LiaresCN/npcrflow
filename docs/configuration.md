@@ -25,6 +25,12 @@ The same fields are available through the typed Python configuration classes.
   `kaiser_threshold` (normally 1). `kaiser_cv` uses that count only as the
   upper bound for contiguous validation; it does not assume every component
   above one predicts the target. `max_components` is an explicit safety cap.
+- In full validation work, use `blocked_cv` for the predeclared primary run and
+  repeat the same screened network with `kaiser_cv`, exact `kaiser`, and
+  `variance` (normally `variance_fraction=0.90`) as PCA references. A `fixed`
+  1-to-`max_components` sweep is an optional dimension diagnostic. Alternative
+  PCA runs remain sensitivities and do not replace the primary run after their
+  results are seen.
 - `pca.score_ridge`: stabilizes PC scores when only part of the network exists
   in a year; it does not fill proxy values.
 - The manifest stores the complete fitted eigenvalue spectrum and full-model

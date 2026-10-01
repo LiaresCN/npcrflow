@@ -244,6 +244,12 @@ and overfits the current PDO network; the revised default keeps four PCs,
 restores apparent `r=0.778`, and gives outer-block correlations
 `0.561/0.559/0.697` with positive CE in every block.
 
+For a full method evaluation, compare the predeclared `blocked_cv` primary run
+with `kaiser_cv`, exact `kaiser`, and 90% cumulative-variance selection on the
+same screened proxy grid. A fixed-PC sweep can be added as a dimension
+diagnostic. These PCA alternatives are structural sensitivity references, not
+a post hoc contest for replacing the primary reconstruction.
+
 Version 0.4.2 restores the interpretation used by the WNPSM/PDO workflow. Main
 result evidence is the full-network reconstruction's correlation with the
 observed target plus CE/RE from internal NPCR model construction. Continuous

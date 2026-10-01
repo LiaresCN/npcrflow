@@ -54,6 +54,16 @@ inner contiguous-block design. The default automatic candidate set is Ridge,
 PLS, and ElasticNet. Random forest is intentionally excluded from that set
 because its PDO apparent fit did not generalize under contiguous external
 validation.
+
+For a full NPCR method evaluation, keep `blocked_cv` as the predeclared primary
+PCA rule and run `kaiser_cv`, exact `kaiser`, and cumulative `variance`
+selection on the same screened proxy grid as structural references. A fixed-PC
+sweep may additionally diagnose sensitivity to dimension. Hold the target,
+calibration period, regression candidates, amplitude procedure, and random seed
+constant. Compare selected PC count, main observation correlation, internal
+median CE/RE, SD ratio, and directed external correlations. These alternative
+PCA runs are supplementary and are not used to retrospectively choose the main
+result.
 Outer contiguous folds refit target-based proxy screening, proxy means/scales,
 the PCA basis, component choice, and regression. The held-out target therefore
 cannot influence even the network membership. The full reconstruction is fit only after validation.
