@@ -215,3 +215,34 @@ workbooks.
   of the main observation figure while retaining their CSV audit; turn it on
   only when that supplementary panel is wanted. Per-NEST files and
   bootstrap-member files are not saved.
+
+## Runtime without changing the NEST method
+
+The implementation prepares annual proxy data once, computes finite-overlap
+correlations in batches, groups native observations into windows, and caches
+PC scores by internal fold and PC count. Each NEST still has its own fitted
+PCA and CE/RE assessment; no cache is shared across different fitted bases.
+These are engineering optimizations, not changes to scientific thresholds.
+
+For a first main-result check, `n_bootstrap=0`,
+`full_network_outer_validation=False`, `rescreen_outer_folds=False`, and
+disabled proxy-network sensitivities avoid optional repeated reconstructions.
+This still runs the primary NEST PCA/PCR and internal CE/RE when
+`auto_tune=True`. A zero-bootstrap check does not provide bootstrap uncertainty
+intervals; do not interpret its repeated point-value quantile columns as such.
+Enable the desired supplementary experiments and bootstrap separately when
+they are needed, rather than rerunning them with every configuration change.
+
+A declared smaller PC search or one Ridge penalty can reduce runtime further,
+but it changes the search scope and is not guaranteed to preserve the selected
+model. To test fixed choices while retaining internal CE/RE, use
+`PCAConfig(selection="fixed", n_components=...)`, a single `ridge_alphas`
+value, and keep `auto_tune=True`. In contrast, `auto_tune=False` skips internal
+candidate validation; it is not the equivalent of a fully CE/RE-checked main
+NPCR run.
+
+Use one numerical-library thread per allocated CPU for these small linear
+systems. The MEL examples use one CPU and one BLAS thread; requesting many
+threads is not a substitute for avoiding repeated score calculations. The
+score-cache benchmark and its scope are documented in
+`docs/validation_results.md`.
