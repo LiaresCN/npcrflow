@@ -30,7 +30,7 @@ from npcrflow.model import (
     _pairwise_correlation, _score_rows, fit_native_pcr,
 )
 from npcrflow.pipeline import filter_records_with_report, run_pipeline
-from npcrflow.nesting import explicit_nest_validation
+from npcrflow.nesting import build_coverage_nests, explicit_nest_validation
 from npcrflow.records import ProxyCollection, ProxyRecord
 from npcrflow.low_frequency import _native_support_widths, variational_low_frequency_adjustment
 from npcrflow.reconstruction import blocked_pipeline_validation, blocked_validation
@@ -867,6 +867,26 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(models, [])
         self.assertEqual(audit.iloc[0]["reason"], "no_native_proxy_in_fitted_pca")
 
+    def test_coverage_nests_keep_longest_unique_original_predictor_sets(self):
+        bounds = {"a": (40, 2005), "b": (80, 1990),
+                  "c": (500, 2010), "d": (1800, 2000)}
+        records = {
+            pid: ProxyRecord(pid, [start, end], [0.0, 1.0])
+            for pid, (start, end) in bounds.items()
+        }
+        config = ReconstructionConfig(n_bootstrap=0)
+        specs = build_coverage_nests(records, list(records), ScreeningConfig(), config)
+        self.assertEqual(
+            [(spec.start, spec.end, spec.pids) for spec in specs],
+            [(80, 1990, ("a", "b")),
+             (500, 1990, ("a", "b", "c")),
+             (500, 2005, ("a", "c")),
+             (1800, 1990, ("a", "b", "c", "d")),
+             (1800, 2000, ("a", "c", "d"))],
+        )
+        # Coverage uses the original envelope, not a fabricated annual fill.
+        self.assertTrue(all(len(record.time) == 2 for record in records.values()))
+
     def test_explicit_nest_end_to_end_records_resolution_subnest(self):
         years = np.arange(1900, 2000)
         latent = np.sin((years - 1900) / 8.0)
@@ -920,6 +940,14 @@ class ModelTests(unittest.TestCase):
             resolution["resolution_years"] == 3, "accepted"
         ].iloc[0]))
         self.assertIn("resolution_subnest", set(result.model_selection["nest_layer"]))
+        native_weights = result.proxy_weights.loc[
+            result.proxy_weights["pid"] == "stalagmite"
+        ]
+        self.assertFalse(native_weights.empty)
+        self.assertEqual(set(native_weights["nest_layer"]), {"resolution_subnest"})
+        self.assertEqual(set(native_weights["resolution_years"]), {3})
+        np.testing.assert_array_equal(records["stalagmite"].time, three_years)
+        self.assertFalse((result.interpolation_audit["pid"] == "stalagmite").any())
         self.assertEqual(result.reconstruction["Year"].diff().dropna().unique().tolist(), [1])
         self.assertGreater(int(result.reconstruction["ensemble_n"].max()), 0)
 
