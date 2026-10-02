@@ -42,24 +42,31 @@ A stricter fusion ablation retains all 63 reconstruction-eligible screened
 records and the same 397 coverage NESTs as the mixed-resolution run, but sets
 the resolution constraint weight to zero. It accepts 370 coverage NESTs and
 gives apparent `r=0.760785`, SD ratio `0.624688`, and RMSE `0.614677` against
-1900–2000 observations. The first completed mixed-resolution implementation
-accepts the same 370 coverage NESTs plus 885 resolution sub-NESTs and gives:
+1900–2000 observations. The verified mixed-resolution implementation
+accepts the same 370 coverage NESTs plus 934 resolution sub-NESTs and gives:
 
 | Same 397-NEST coverage grid | Observation r | SD ratio | 10-year low-pass r | Low-pass SD ratio |
 | --- | ---: | ---: | ---: | ---: |
 | Resolution fusion disabled | 0.7608 | 0.6247 | 0.8556 | 0.6619 |
-| Native-window PCA/PCR fusion | 0.7752 | 0.6437 | 0.8763 | 0.6887 |
+| Native-window PCA/PCR fusion | 0.7759 | 0.6439 | 0.8770 | 0.6893 |
 
 This is a modest apparent calibration improvement, not an independent
 validation or universal low-resolution benefit. Both annual products are
 552–2011. Six native records (five speleothems and one ice record) are retained
 in accepted window-scale PCA fits; native proxy values are not interpolated.
 The accepted annual NESTs have median internal CE `0.393042` and RE `0.446296`;
-accepted resolution sub-NESTs have median CE `0.487131` and RE `0.577780`.
-The first implementation's compact outputs total about 23.7 MB, without NEST
-matrices or workbooks. Optimized complete runs and their numerical/timing
-cross-checks remain pending; do not describe v0.6.0 as frozen yet. The
+accepted resolution sub-NESTs have median CE `0.487802` and RE `0.581601`.
+The compact outputs total about 24.3 MB, without NEST matrices or workbooks.
+Only one Coral proxy-year is interpolated, with no endpoint extrapolation;
+native resolution-layer records remain unfilled. The completed single-CPU
+pre-score-cache run takes 1:13:39 and uses a maximum of about 384 MB RAM.
+Its paired score-cache run is finishing; do not describe v0.6.0 as frozen yet. The
 annual-only ablation changes the coverage grid and cannot alone isolate fusion.
+
+The earlier development run (`pdo_v060_explicit_nests_smoke`, four allocated
+CPUs) gave `r=0.775248` and 885 accepted resolution sub-NESTs before the final
+finite-overlap/window engineering corrections and audit changes. It is a
+historical diagnostic, not the final numerically paired cache benchmark.
 
 All supplementary PCA references have completed on the identical screened
 network and raw-input hashes:
