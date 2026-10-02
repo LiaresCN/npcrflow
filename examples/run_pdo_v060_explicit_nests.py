@@ -1,6 +1,7 @@
 """PDO verification of explicit in-memory and multiresolution NESTs."""
 
 from dataclasses import replace
+import argparse
 import logging
 
 from npcrflow import run_pipeline
@@ -10,6 +11,9 @@ from run_pdo_from_raw_dod2k import PROXIES, TARGET
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output-directory", default="pdo_v060_explicit_nests_verified")
+    args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     config = build_config(
         output_directory=None,
@@ -29,7 +33,7 @@ def main() -> None:
         ),
         output=replace(
             config.output,
-            directory=config.output.directory.parent / "pdo_v060_explicit_nests_verified",
+            directory=config.output.directory.parent / args.output_directory,
             save_proxy_map=False,
             save_observation_plot=False,
         ),

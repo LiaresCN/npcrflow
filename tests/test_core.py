@@ -25,7 +25,10 @@ from npcrflow.config import (
 from npcrflow.amplitude import fit_amplitude_calibrator
 from npcrflow.data import annualize_record, load_observations, load_proxy_database
 from npcrflow.deduplicate import deduplicate_frame
-from npcrflow.model import _component_candidates, _pairwise_correlation, _score_rows, fit_native_pcr
+from npcrflow.model import (
+    NativePCRModel, _component_candidates, _fit_candidate,
+    _pairwise_correlation, _score_rows, fit_native_pcr,
+)
 from npcrflow.pipeline import filter_records_with_report, run_pipeline
 from npcrflow.nesting import explicit_nest_validation
 from npcrflow.records import ProxyCollection, ProxyRecord
@@ -440,6 +443,53 @@ class ModelTests(unittest.TestCase):
             full_matrix_fit = fit_native_pcr(matrix, target, train, pca, config)
         np.testing.assert_allclose(
             optimized.predict(matrix), full_matrix_fit.predict(matrix),
+            atol=1e-12, rtol=1e-12, equal_nan=True,
+        )
+
+    def test_fold_score_cache_preserves_selection_and_full_prediction(self):
+        rng = np.random.default_rng(71)
+        years = np.arange(1800, 2001)
+        latent = np.sin((years - 1800) / 8)
+        matrix = pd.DataFrame({
+            f"p{i}": latent + rng.normal(0, 0.3, len(years))
+            for i in range(6)
+        }, index=years)
+        matrix.loc[years[::4], "p1"] = np.nan
+        matrix.loc[years[1::5], "p2"] = np.nan
+        target = pd.Series(latent + rng.normal(0, 0.1, len(years)), index=years)
+        pca = PCAConfig(selection="blocked_cv", max_components=3)
+        config = ReconstructionConfig(
+            regression="ridge", ridge_alphas=(0.0, 0.1, 1.0),
+            amplitude=AmplitudeCalibrationConfig(method="auto"),
+            validation_block_years=20, n_bootstrap=0,
+        )
+        with patch("npcrflow.model._score_rows", wraps=_score_rows) as calls:
+            cached = fit_native_pcr(matrix, target, years[-101:], pca, config)
+            cached_calls = calls.call_count
+
+        def uncached_candidate(*args, **kwargs):
+            kwargs["precomputed_scores"] = None
+            return _fit_candidate(*args, **kwargs)
+
+        # Independently recalculate both candidate training and validation
+        # scores; no cache is involved in their fitted coefficients/metrics.
+        original_predict_scores = NativePCRModel._predict_scores
+
+        def recalculated_prediction(model, values, _scores):
+            return original_predict_scores(model, values, model.scores(values))
+
+        with patch("npcrflow.model._fit_candidate", side_effect=uncached_candidate), \
+                patch.object(NativePCRModel, "_predict_scores", recalculated_prediction), \
+                patch("npcrflow.model._score_rows", wraps=_score_rows) as calls:
+            uncached = fit_native_pcr(matrix, target, years[-101:], pca, config)
+            uncached_calls = calls.call_count
+        self.assertLess(cached_calls, uncached_calls / 3)
+        pd.testing.assert_frame_equal(
+            cached.selection_table, uncached.selection_table,
+            check_exact=False, atol=1e-12, rtol=1e-12,
+        )
+        np.testing.assert_allclose(
+            cached.predict(matrix), uncached.predict(matrix),
             atol=1e-12, rtol=1e-12, equal_nan=True,
         )
 

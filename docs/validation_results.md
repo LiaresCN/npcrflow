@@ -39,6 +39,24 @@ This run disables bootstrap and external sensitivities to isolate the NEST
 and resolution comparison. Mixed-resolution PDO results are pending and must
 not be inferred from this ablation or historical v0.5 scores.
 
+A stricter fusion ablation retains all 63 reconstruction-eligible screened
+records and the same 397 coverage NESTs as the mixed-resolution run, but sets
+the resolution constraint weight to zero. It accepts 370 coverage NESTs and
+gives apparent `r=0.760785`, SD ratio `0.624688`, and RMSE `0.614677` against
+1900–2000 observations. The mixed-resolution result is still pending; the
+annual-only ablation above also changes the coverage network and cannot alone
+identify the contribution of window-scale fusion.
+
+The score-cache engineering benchmark
+(`examples/benchmark_score_cache.py`, reference `2615aa1`) uses 40 synthetic
+missing-data proxies, five candidate PC counts, six Ridge penalties and
+101 calibration years. On one c060 CPU, three repeats reduced median tuning
+time from 3.12 to 2.30 seconds, about 26%, and score calculations from 171 to
+26. Model-selection tables, internal CE/RE and full-period predictions match
+within `1e-12`; maximum prediction difference was zero. This timing measures
+one tuned PCR, not screening, uncertainty, external sensitivities or the
+complete 397-NEST PDO workflow. A matched complete PDO timing is pending.
+
 The independent controlled check in
 `examples/run_synthetic_resolution_nests.py` pairs ten annual tree proxies
 with one 3-, 5-, or 10-year native stalagmite. Trees contain the annual

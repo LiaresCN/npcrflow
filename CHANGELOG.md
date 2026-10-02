@@ -16,6 +16,12 @@
 - Vectorized finite-overlap correlations and grouped native-window means;
   finite-pair Pearson and full-period prediction checks verify the same
   numerical method, including constant overlaps, missing years and edges.
+- Cached PC scores separately for each internal fold and PC count across
+  regression and amplitude candidates. Training-only fold bases remain
+  independent. Paired tests preserve selection, CE/RE and full predictions.
+  A reproducible single-model benchmark reduced score solves from 171 to 26
+  and median tuning time from 3.12 to 2.30 seconds (26% reduction); this is
+  not an end-to-end speed claim.
 - Added 2/3/5/10-year resolution sub-NESTs. Coarser proxy observations join
   PCA and regression together with annual proxies and targets aggregated onto
   identical native windows; proxy gaps are never filled to annual values.

@@ -13,4 +13,4 @@ export PYTHONPATH=/share/home/lrs/codex/projects/npcrflow/src
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
 export MKL_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
 export OPENBLAS_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
-/share/home/lrs/.conda/envs/mybase/bin/python -u examples/run_pdo_v060_explicit_nests.py
+/share/home/lrs/.conda/envs/mybase/bin/python -u examples/run_pdo_v060_explicit_nests.py "$@"

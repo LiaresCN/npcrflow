@@ -71,9 +71,11 @@ class NativePCRModel:
         )
 
     def predict_raw(self, matrix: pd.DataFrame) -> pd.Series:
-        scores = self.scores(matrix)
+        return self._predict_raw_scores(self.scores(matrix))
+
+    def _predict_raw_scores(self, scores: pd.DataFrame) -> pd.Series:
         finite = np.all(np.isfinite(scores.to_numpy(float)), axis=1)
-        result = pd.Series(np.nan, index=matrix.index, name="reconstruction", dtype=float)
+        result = pd.Series(np.nan, index=scores.index, name="reconstruction", dtype=float)
         if finite.any():
             predicted = np.asarray(self.regressor.predict(scores.loc[finite])).reshape(-1)
             result.loc[finite] = predicted
@@ -82,6 +84,9 @@ class NativePCRModel:
     def predict(self, matrix: pd.DataFrame) -> pd.Series:
         """Predict with the declared training-only amplitude calibration."""
 
+        return self._predict_scores(matrix, self.scores(matrix))
+
+    def _predict_scores(self, matrix: pd.DataFrame, scores: pd.DataFrame) -> pd.Series:
         effective_availability = (
             matrix.reindex(columns=self.columns)
             .notna()
@@ -90,7 +95,7 @@ class NativePCRModel:
             .rename("effective_availability")
         )
         return self.amplitude_calibrator.apply(
-            self.predict_raw(matrix), effective_availability
+            self._predict_raw_scores(scores), effective_availability
         )
 
 
@@ -316,6 +321,7 @@ def _fit_candidate(
     regression_name: str | None = None,
     basis: tuple | None = None,
     amplitude_config: AmplitudeCalibrationConfig | None = None,
+    precomputed_scores: pd.DataFrame | None = None,
 ) -> NativePCRModel:
     train_years = list(train_years)
     basis_function = _fit_pairwise_basis if pca_config.method == "pairwise" else _fit_complete_basis
@@ -332,20 +338,16 @@ def _fit_candidate(
     # Fitting only needs training scores. Repeatedly solving PC scores for
     # millennia outside calibration in every candidate/fold inflated runtime
     # without affecting any fitted coefficient or validation prediction.
-    scores = _score_rows(
-        matrix.loc[matrix.index.isin(train_years)],
-        columns,
-        means,
-        scales,
-        trend_intercepts,
-        trend_slopes,
-        trend_origin,
-        loadings,
-        n_components,
-        pca_config.min_proxies_per_year,
-        pca_config.score_ridge,
-        proxy_weights,
-    )
+    scores = precomputed_scores
+    if scores is None:
+        scores = _score_rows(
+            matrix.loc[matrix.index.isin(train_years)],
+            columns, means, scales,
+            trend_intercepts, trend_slopes, trend_origin,
+            loadings, n_components,
+            pca_config.min_proxies_per_year, pca_config.score_ridge,
+            proxy_weights,
+        )
     years = [year for year in train_years if year in target.index and year in scores.index]
     joined = scores.loc[years].copy()
     joined["target"] = target.reindex(years).to_numpy(float)
@@ -536,6 +538,29 @@ def fit_native_pcr(
         )
         for fold_train, _ in folds
     ]
+    # Each fold's PCA scores depend on its own fitted basis and PC count, but
+    # never on regression alpha/family or amplitude choice. Reuse them across
+    # those candidates while keeping a separate training-only basis per fold.
+    fold_score_cache: dict[tuple[int, int], pd.DataFrame] = {}
+
+    def fold_scores(fold_number: int, requested_components: int) -> pd.DataFrame:
+        basis = fold_bases[fold_number]
+        count = min(requested_components, basis[3].shape[1])
+        key = (fold_number, count)
+        if key not in fold_score_cache:
+            (
+                columns, means, scales, loadings, _,
+                intercepts, slopes, origin, weights, _,
+            ) = basis
+            train, validation = folds[fold_number]
+            fold_matrix = matrix.loc[matrix.index.isin(np.concatenate([train, validation]))]
+            fold_score_cache[key] = _score_rows(
+                fold_matrix, columns, means, scales, intercepts, slopes, origin,
+                loadings, count, pca_config.min_proxies_per_year,
+                pca_config.score_ridge, weights,
+            )
+        return fold_score_cache[key]
+
     regression_order = {
         name: position for position, name in enumerate(regression_candidates)
     }
@@ -550,8 +575,11 @@ def fit_native_pcr(
         selection_stage: str,
     ) -> dict[str, object] | None:
         fold_metrics: list[dict[str, float]] = []
-        for (fold_train, fold_validation), fold_basis in zip(folds, fold_bases):
+        for fold_number, ((fold_train, fold_validation), fold_basis) in enumerate(
+            zip(folds, fold_bases)
+        ):
             try:
+                scores = fold_scores(fold_number, int(n_components))
                 fold_model = _fit_candidate(
                     matrix,
                     target,
@@ -563,8 +591,12 @@ def fit_native_pcr(
                     regression_name=str(regression_name),
                     basis=fold_basis,
                     amplitude_config=amplitude,
+                    precomputed_scores=scores,
                 )
-                prediction = fold_model.predict(matrix.loc[fold_validation])
+                validation_scores = scores.loc[fold_validation]
+                prediction = fold_model._predict_scores(
+                    matrix.loc[fold_validation], validation_scores
+                )
                 metrics = reconstruction_metrics(
                     target.reindex(fold_validation),
                     prediction,
@@ -572,7 +604,7 @@ def fit_native_pcr(
                 )
                 raw_metrics = reconstruction_metrics(
                     target.reindex(fold_validation),
-                    fold_model.predict_raw(matrix.loc[fold_validation]),
+                    fold_model._predict_raw_scores(validation_scores),
                     calibration_mean=float(target.reindex(fold_train).mean()),
                 )
                 metrics.update({f"raw_{key}": value for key, value in raw_metrics.items()})
