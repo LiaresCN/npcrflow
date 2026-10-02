@@ -68,14 +68,14 @@ class ScreeningConfig:
     """
 
     period: tuple[int, int] | None = None
-    season_mode: Literal["fixed", "auto"] = "fixed"
+    season_mode: Literal["fixed", "auto"] = "auto"
     months: tuple[int, ...] = tuple(range(1, 13))
     season_candidates: tuple[tuple[int, ...], ...] = DEFAULT_SEASONS
     season_year: Literal["end", "start", "calendar"] = "end"
     minimum_month_fraction: float = 0.75
     min_overlap: int = 20
-    low_resolution_min_overlap: int | None = None
-    low_resolution_cutoff_years: float = 5.0
+    low_resolution_min_overlap: int | None = 8
+    low_resolution_cutoff_years: float = 1.5
     p_threshold: float = 0.10
     r_threshold: float = 0.0
     detrend: bool = False
@@ -127,11 +127,11 @@ class PCAConfig:
     method: Literal["pairwise", "complete"] = "pairwise"
     selection: Literal[
         "kaiser", "kaiser_cv", "variance", "fixed", "blocked_cv"
-    ] = "blocked_cv"
+    ] = "kaiser"
     n_components: int | None = None
     kaiser_threshold: float = 1.0
     variance_fraction: float = 0.90
-    max_components: int = 10
+    max_components: int = 8
     min_pairwise_overlap: int = 10
     min_proxies_per_year: int = 2
     score_ridge: float = 0.10
@@ -373,7 +373,9 @@ class ReconstructionConfig:
     extrapolates record endpoints. ``none`` preserves every native gap.
     ``auto_tune=False`` uses
     the first admissible PC count and first configured regularization value;
-    the default performs nested blocked tuning.  CE and RE thresholds apply
+    the standard uses repeated random NEST calibration/validation; an explicit
+    zero-ensemble engineering check uses blocked candidate validation.
+    CE and RE thresholds apply
     only to that internal PCR-model construction.  Outer contiguous-period
     results are correlation sensitivities and never accept or reject the
     final full-network reconstruction.
@@ -394,16 +396,16 @@ class ReconstructionConfig:
     standardization_period: tuple[int, int] | None = None
     regression: Literal[
         "auto", "ols", "ridge", "pls", "elasticnet", "random_forest"
-    ] = "ridge"
+    ] = "ols"
     regression_candidates: tuple[str, ...] = ("ridge", "pls", "elasticnet")
-    ridge_alphas: tuple[float, ...] = (0.0, 0.01, 0.1, 1.0, 10.0, 100.0)
+    ridge_alphas: tuple[float, ...] = (0.0, 1.0, 10.0)
     pls_components: int = 2
     random_forest_trees: int = 500
     random_forest_min_samples_leaf: int = 5
     random_forest_max_features: float = 1.0
     evaluation_lowpass_periods: tuple[float, ...] = (10.0, 20.0)
     evaluation_period_bands: tuple[tuple[float, float], ...] = ((10.0, 30.0),)
-    validation_block_years: int = 20
+    validation_block_years: int = 34
     minimum_internal_train_samples: int = 20
     n_bootstrap: int = 500
     bootstrap_method: Literal["random_holdout", "moving_block"] = "random_holdout"
@@ -412,18 +414,19 @@ class ReconstructionConfig:
     minimum_bootstrap_success_fraction: float = 0.80
     random_seed: int = 20260926
     external_validation_fraction: float = 1.0 / 3.0
-    full_network_outer_validation: bool = True
-    rescreen_outer_folds: bool = True
-    min_ce: float | None = 0.0
-    min_re: float | None = 0.0
-    # Preserve the frozen inclusive gate unless strict positivity is requested.
-    internal_ce_re_comparison: Literal["ge", "gt"] = "ge"
+    full_network_outer_validation: bool = False
+    rescreen_outer_folds: bool = False
+    min_ce: float | None = 0.1
+    min_re: float | None = 0.1
+    internal_ce_re_comparison: Literal["ge", "gt"] = "gt"
     skill_floor: float = 0.0
     # Retained for reading v0.4.1 configurations.  It no longer classifies
     # outer validation or the final reconstruction.
     strong_skill_threshold: float = 0.5
     auto_tune: bool = True
-    amplitude: AmplitudeCalibrationConfig = field(default_factory=AmplitudeCalibrationConfig)
+    amplitude: AmplitudeCalibrationConfig = field(default_factory=lambda: AmplitudeCalibrationConfig(
+        method="auto", auto_candidates=("variance_observation", "variance_max_proxy_nest"),
+    ))
     proxy_weights: ProxyWeightConfig = field(default_factory=ProxyWeightConfig)
     multiresolution: MultiresolutionConfig = field(default_factory=MultiresolutionConfig)
     nest: ExplicitNestConfig = field(default_factory=ExplicitNestConfig)

@@ -4,6 +4,13 @@ The complete JSON template is `examples/pdo_config.json`. It declares every
 current option; no notebook cell or hidden global variable changes the method.
 The same fields are available through the typed Python configuration classes.
 
+Version1.0 defaults: pairwise Kaiser eigenvalue>1/cap8, OLS,
+500 per-NEST random 2/3-calibration/1/3-validation regressions, strict median
+CE>0.1 and RE>0.1, and two per-training variance-reference candidates.
+External segment sensitivities are off by default and enabled explicitly.
+Screening/calibration periods, target season and metadata scope are still
+question-specific; PDO's d18O-only restriction is not a universal default.
+
 ## Proxy input and screening
 
 Low-resolution screening defaults to `low_resolution_pairing="window"`.
@@ -47,8 +54,8 @@ minimum-overlap setting counts real paired windows, not years.
   `kaiser_threshold` (normally 1). `kaiser_cv` uses that count only as the
   upper bound for contiguous validation; it does not assume every component
   above one predicts the target. `max_components` is an explicit safety cap.
-- In full validation work, use `blocked_cv` for the predeclared primary run and
-  repeat the same screened network with `kaiser_cv`, exact `kaiser`, and
+- In full validation work, use capped `kaiser` for the predeclared v1.0 primary run and
+  repeat the same screened network with `kaiser_cv`, `blocked_cv`, and
   `variance` (normally `variance_fraction=0.90`) as PCA references. A `fixed`
   1-to-`max_components` sweep is an optional dimension diagnostic. Alternative
   PCA runs remain sensitivities and do not replace the primary run after their
@@ -72,8 +79,10 @@ minimum-overlap setting counts real paired windows, not years.
 - `reconstruction.detrend_proxies` controls linear detrending before NEST PCA;
   it is independent of screening detrending. No temporal proxy filter is
   applied implicitly.
-- Every NEST estimates its PCA mean and standard deviation again from its own
-  training years. `reconstruction.standardization_period=(1950, 2000)` adds the
+- The standard random-holdout NEST estimates its PCA mean, standard deviation
+  and loadings once over its full proxy matrix. Moving-block refits and
+  zero-ensemble blocked checks use their calibration samples instead.
+  `reconstruction.standardization_period=(1950, 2000)` adds the
   former WNPSM common-reference z-score once, in memory, before NEST fitting;
   `None` skips this otherwise redundant preprocessing transform. In every
   external validation fit the common reference is intersected with that fit's
@@ -94,16 +103,16 @@ minimum-overlap setting counts real paired windows, not years.
   thresholds when its median inner-fold CE and RE meet `min_ce` and `min_re`;
   the complete selection table reports candidates that did not pass. Each
   explicit NEST applies this decision independently.
-- `internal_ce_re_comparison="ge"` preserves the frozen inclusive CE/RE
-  thresholds. Set `"gt"` to require both internal medians strictly greater
+- `internal_ce_re_comparison="gt"` is the v1.0 strict default. `"ge"` preserves
+  the old inclusive CE/RE thresholds. `"gt"` requires both internal medians strictly greater
   than their respective thresholds; zero is then rejected at a zero threshold.
   This comparison never changes external sensitivities into acceptance gates.
 - `n_bootstrap`, `bootstrap_block_years`, and
   `minimum_bootstrap_success_fraction` control ensemble uncertainty. A run
   fails loudly if too few members fit instead of silently reporting a
   one-member "ensemble".
-  The development default is **500** replicates; `n_bootstrap=0` disables it.
-  `bootstrap_method="random_holdout"` is the development default requested
+  The default is **500** repetitions; `n_bootstrap=0` disables it.
+  `bootstrap_method="random_holdout"` is the v1.0 default requested
   by the user. Build PCA once on each full NEST proxy matrix; randomly split
   its finite observation/PC overlap with `bootstrap_validation_fraction=1/3`
   and fit regressions on the other 2/3, without replacement, 500 times.

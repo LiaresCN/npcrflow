@@ -1,10 +1,10 @@
 # npcrflow
 
-Development note (2026-10-03): `codex/ols-kaiser-runtime` restores the user's
+Version **1.0.0** (2026-10-03) restores the user's
 original per-NEST PCA followed by 500 random 2/3-calibration, 1/3-validation
 regressions and yearwise pooling of all accepted NEST x run predictions.
-It also adds matching-window low-resolution screening. This is experimental;
-the frozen v0.6.0 tag and release wheel below are unchanged.
+It also adds matching-window low-resolution screening. This is the adopted
+standard method; earlier release tags and wheels remain available for reproduction.
 
 `npcrflow` turns the former multi-notebook NPCR workflow into one importable,
 auditable pipeline.  It reads the raw 21-column Dod2k pickle directly, screens
@@ -20,14 +20,14 @@ files live under this project.
 ## Installation
 
 ```bash
-python -m pip install git+https://github.com/LiaresCN/npcrflow.git@v0.6.0
+python -m pip install git+https://github.com/LiaresCN/npcrflow.git@v1.0.0
 ```
 
 For an offline MEL installation, use the release wheel without modifying the
 source environment:
 
 ```bash
-python -m pip install /path/to/npcrflow-0.6.0-py3-none-any.whl
+python -m pip install /path/to/npcrflow-1.0.0-py3-none-any.whl
 ```
 
 ## Minimal use
@@ -54,7 +54,7 @@ cfg = PipelineConfig(
         p_threshold=0.10,
         r_threshold=0.20,
     ),
-    pca=PCAConfig(method="pairwise", selection="blocked_cv"),
+    pca=PCAConfig(method="pairwise", selection="kaiser", max_components=8),
     reconstruction=ReconstructionConfig(
         method="explicit_nest",
         calibration_period=(1940, 2010),
@@ -65,9 +65,12 @@ cfg = PipelineConfig(
         retain_longest_annual_segment=True,
         detrend_proxies=False,
         standardization_period=None,  # or, e.g., (1950, 2000)
-        regression="auto",
-        regression_candidates=("ridge", "pls", "elasticnet"),
+        regression="ols",
         n_bootstrap=500,
+        bootstrap_method="random_holdout",
+        bootstrap_validation_fraction=1/3,
+        min_ce=0.1, min_re=0.1, internal_ce_re_comparison="gt",
+        full_network_outer_validation=False, rescreen_outer_folds=False,
         nest=ExplicitNestConfig(
             minimum_span_years=50,
             combination="median",
@@ -78,7 +81,8 @@ cfg = PipelineConfig(
             subnest_max_resolution_years=10.0,
         ),
         amplitude=AmplitudeCalibrationConfig(
-            method="auto",              # includes dynamic variance
+            method="auto",
+            auto_candidates=("variance_observation", "variance_max_proxy_nest"),
             variance_reference="observation",  # observation | max_proxy_nest
             minimum_overlap=20,
             slope_bounds=(0.25, 4.0),
@@ -143,8 +147,10 @@ low-frequency sensitivity experiment. The manifest records this choice.
 Proxy screening detrending (`ScreeningConfig.detrend`) and reconstruction-stage
 proxy detrending (`ReconstructionConfig.detrend_proxies`) are separate switches
 and are both off in the PDO baseline. Proxy values are never silently filtered.
-Each NEST always standardizes its columns again from its own training years for
-PCA. Set `standardization_period=(1950, 2000)`, as in the WNPSM example, to add
+In the standard random-holdout method, PCA standardization and loadings are
+fitted once over that full NEST's proxy data before random regression splits.
+The optional moving-block and zero-ensemble blocked checks use calibration
+PCA instead. Set `standardization_period=(1950, 2000)`, as in the WNPSM example, to add
 the former common-reference proxy z-score once in memory *before* NEST
 construction. In an outer validation run, this first reference uses only the
 intersection with that run's calibration years; no intermediate proxy or NEST
@@ -210,21 +216,23 @@ Create the audited Dod2k copy with:
   the main reconstruction.
 - Standard paleoclimate definitions are used: RE is referenced to the
   calibration mean and CE to the validation mean.  CE is never randomized.
-- Ridge is the conservative fixed regression because it stabilizes correlated
-  PCs while retaining linear extrapolation. Setting `regression="auto"`
-  compares Ridge, PLS, and ElasticNet only inside contiguous calibration
-  blocks, then locks the selected family through later fitting and bootstrap.
-  OLS and an optional random forest are also selectable explicitly. The random forest passes through the same native-score
-  and contiguous-block validation path, but its bounded extrapolation is a
-  known limitation; it is retained only if held-out evidence beats the linear
-  baselines.
+- Ordinary multiple linear regression (`regression="ols"`) is the v1.0
+  standard. Ridge, PLS, ElasticNet and random forest remain declared options;
+  they are not presumed to outperform OLS. `regression="auto"` compares
+  explicitly configured families in the declared internal validation protocol.
+  Random forest's bounded extrapolation is a limitation for reconstruction.
 - CE/RE are used only during internal NPCR model construction, analogous to
   the regression screening within the former WNPSM NEST loop. PC count,
   regression, regularization, and amplitude candidates are judged by their
   inner-fold median CE and RE against configurable `min_ce`/`min_re` values
-  (normally 0 or 0.05). External segment sensitivities never change those
+  (v1.0 default: both strictly >0.1; explicitly selectable >0.05 or >0).
+  The standard computes these medians across500 random 2/3-to-1/3 runs.
+  External segment sensitivities never change those
   choices or label the full reconstruction as failed.
-- Amplitude calibration is explicit and off by default. `ols` estimates a
+- Amplitude calibration is explicit. The v1.0 standard compares only the
+  observation-variance and max-proxy-tier variance references; `none` remains
+  available. Per-NEST calibration does not guarantee final combined SD=1.
+  `ols` estimates a
   training-only affine map; `variance` matches the training-period mean and
   standard deviation either to the observation or to the densest eligible
   proxy network (`variance_reference="max_proxy_nest"`). The latter is the
@@ -294,8 +302,8 @@ and overfits the current PDO network; the revised default keeps four PCs,
 restores apparent `r=0.778`, and gives outer-block correlations
 `0.561/0.559/0.697` with positive CE in every block.
 
-For a full method evaluation, compare the predeclared `blocked_cv` primary run
-with `kaiser_cv`, exact `kaiser`, and 90% cumulative-variance selection on the
+For a full v1.0 method evaluation, compare the predeclared capped `kaiser` primary run
+with `kaiser_cv`, `blocked_cv`, and90% cumulative-variance selection on the
 same screened proxy grid. A fixed-PC sweep can be added as a dimension
 diagnostic. These PCA alternatives are structural sensitivity references, not
 a post hoc contest for replacing the primary reconstruction.
@@ -319,6 +327,12 @@ screened by internal CE/RE. Resolution sub-NESTs let 2–10-year records
 participate in window-scale PCA/PCR with annual proxies aggregated to matching
 windows; their predictions are fused into the annual state without proxy
 interpolation.
+
+Version1.0.0 adopts the original full-NEST PCA ->500 repeated random
+2/3-calibration/1/3-validation regressions ->median CE/RE NEST acceptance
+->pool all accepted NEST x run predictions by year sequence. Matching-window
+screening and native-step DOF make low-resolution screening consistent in
+scale with the reconstruction layers. See [release notes](docs/release_v1.0.0.md).
 
 ## Compact outputs
 
@@ -393,12 +407,18 @@ PYTHONPATH=src /share/home/lrs/.conda/envs/mybase/bin/python \
   -m unittest discover -s tests -v
 ```
 
-Version 0.6.0 currently passes 48 tests, including an end-to-end mixed-
+Version1.0.0 includes tests for end-to-end mixed-
 resolution case in which a native three-year speleothem and annual tree-ring
 means jointly enter a three-year PCA/PCR layer. The development default uses
 500 random 2/3-calibration, 1/3-validation regressions per NEST, with the
 NEST's PCA built once, and pools accepted NEST x run predictions by year for
 the median and quantiles. Moving-block Bootstrap remains an explicit option.
+
+The validated500-run PDO benchmark takes3:57 on one c061 CPU (3:51.74 pipeline),
+with65 selected proxies,374 accepted coverage NESTs,444 accepted resolution
+layers, annual552–2011 and apparent observation r0.79258069. SD ratio0.69439977
+remains damped; no independent external validation was run in this benchmark.
+See [the complete benchmark record](docs/random_nest_ensemble_2026-10-03.md).
 
 The primary PDO regression driver is `examples/run_pdo_from_raw_dod2k.py`; the
 associated Slurm launcher is `scripts/run_pdo_raw_dod2k.slurm`. The older

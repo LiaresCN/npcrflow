@@ -14,6 +14,7 @@ import pandas as pd
 from scipy import signal
 
 from .config import PipelineConfig, ProxyFilterConfig
+from ._version import __version__
 from .data import load_observations, load_proxy_frame, load_proxy_workbook
 from .deduplicate import deduplicate_frame
 from .diagnostics import (
@@ -318,6 +319,7 @@ def save_pipeline_result(
     manifest = {
         "created_utc": datetime.now(timezone.utc).isoformat(),
         "package": "npcrflow",
+        "package_version": __version__,
         "python": platform.python_version(),
         "proxy_source": str(proxy_path.resolve()),
         "proxy_sha256": _sha256(proxy_path),

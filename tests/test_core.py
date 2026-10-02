@@ -80,10 +80,15 @@ class DataTests(unittest.TestCase):
         self.assertTrue(ProxyFilterConfig().deduplicate_exact)
         reconstruction = ReconstructionConfig()
         self.assertFalse(OutputConfig().show_external_sensitivities)
-        self.assertTrue(reconstruction.full_network_outer_validation)
-        self.assertTrue(reconstruction.rescreen_outer_folds)
-        self.assertEqual(reconstruction.min_ce, 0.0)
-        self.assertEqual(reconstruction.min_re, 0.0)
+        self.assertFalse(reconstruction.full_network_outer_validation)
+        self.assertFalse(reconstruction.rescreen_outer_folds)
+        self.assertEqual(reconstruction.min_ce, 0.1)
+        self.assertEqual(reconstruction.min_re, 0.1)
+        self.assertEqual(reconstruction.regression, "ols")
+        self.assertEqual(PCAConfig().selection, "kaiser")
+        self.assertEqual(PCAConfig().max_components, 8)
+        self.assertEqual(reconstruction.amplitude.auto_candidates,
+                         ("variance_observation", "variance_max_proxy_nest"))
         self.assertEqual(reconstruction.strong_skill_threshold, 0.5)
 
     def test_djf_annualization_uses_end_year_without_interpolation(self):
@@ -208,6 +213,7 @@ class DeduplicationTests(unittest.TestCase):
                     reconstruction=ReconstructionConfig(
                         regression="ridge", ridge_alphas=(0.1,), validation_block_years=15,
                         n_bootstrap=0, auto_tune=False,
+                        full_network_outer_validation=True, rescreen_outer_folds=True,
                     ),
                     output=OutputConfig(
                         directory=root / "output",
@@ -375,7 +381,8 @@ class ModelTests(unittest.TestCase):
                     np.nan, above, threshold, threshold, "gt"))
 
     def test_internal_ce_re_comparison_preserves_default_and_validates(self):
-        self.assertEqual(ReconstructionConfig().internal_ce_re_comparison, "ge")
+        self.assertEqual(ReconstructionConfig().internal_ce_re_comparison, "gt")
+        self.assertEqual(ReconstructionConfig(internal_ce_re_comparison="ge").internal_ce_re_comparison, "ge")
         with self.assertRaises(ValueError):
             ReconstructionConfig(internal_ce_re_comparison="invalid")
 
