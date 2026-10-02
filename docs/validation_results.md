@@ -36,16 +36,37 @@ In 1900–2000 the apparent observation correlation is `r=0.753323`, SD ratio
 containing 1,460 consecutive finite values. Total compact outputs are about
 5.4 MB; no predictor matrices, NEST workbooks, or bootstrap members are saved.
 This run disables bootstrap and external sensitivities to isolate the NEST
-and resolution comparison. Mixed-resolution PDO results are pending and must
-not be inferred from this ablation or historical v0.5 scores.
+and resolution comparison.
 
 A stricter fusion ablation retains all 63 reconstruction-eligible screened
 records and the same 397 coverage NESTs as the mixed-resolution run, but sets
 the resolution constraint weight to zero. It accepts 370 coverage NESTs and
 gives apparent `r=0.760785`, SD ratio `0.624688`, and RMSE `0.614677` against
-1900–2000 observations. The mixed-resolution result is still pending; the
-annual-only ablation above also changes the coverage network and cannot alone
-identify the contribution of window-scale fusion.
+1900–2000 observations. The first completed mixed-resolution implementation
+accepts the same 370 coverage NESTs plus 885 resolution sub-NESTs and gives:
+
+| Same 397-NEST coverage grid | Observation r | SD ratio | 10-year low-pass r | Low-pass SD ratio |
+| --- | ---: | ---: | ---: | ---: |
+| Resolution fusion disabled | 0.7608 | 0.6247 | 0.8556 | 0.6619 |
+| Native-window PCA/PCR fusion | 0.7752 | 0.6437 | 0.8763 | 0.6887 |
+
+This is a modest apparent calibration improvement, not an independent
+validation or universal low-resolution benefit. Both annual products are
+552–2011. Six native records (five speleothems and one ice record) are retained
+in accepted window-scale PCA fits; native proxy values are not interpolated.
+The accepted annual NESTs have median internal CE `0.393042` and RE `0.446296`;
+accepted resolution sub-NESTs have median CE `0.487131` and RE `0.577780`.
+The first implementation's compact outputs total about 23.7 MB, without NEST
+matrices or workbooks. Optimized complete runs and their numerical/timing
+cross-checks remain pending; do not describe v0.6.0 as frozen yet. The
+annual-only ablation changes the coverage grid and cannot alone isolate fusion.
+
+Completed supplementary references on the identical screened network give
+`r=0.7884`, SD ratio `0.6246` for Kaiser, and `r=0.7930`, SD ratio `0.6274`
+for 90%-variance retention. Both respect the declared five-PC safety cap;
+Kaiser is therefore not an unlimited reproduction of the former notebook.
+`kaiser_cv` is still running. These references do not replace the predeclared
+blocked-CV primary method merely because their apparent correlation is larger.
 
 The score-cache engineering benchmark
 (`examples/benchmark_score_cache.py`, reference `2615aa1`) uses 40 synthetic
@@ -56,6 +77,12 @@ time from 3.12 to 2.30 seconds, about 26%, and score calculations from 171 to
 within `1e-12`; maximum prediction difference was zero. This timing measures
 one tuned PCR, not screening, uncertainty, external sensitivities or the
 complete 397-NEST PDO workflow. A matched complete PDO timing is pending.
+
+`examples/audit_explicit_nest_outputs.py` reads completed outputs without
+changing them. It checks unique coverage networks, internal CE/RE gates,
+actual retained native PCA members, annual continuity, interpolation eligibility,
+and absence of NEST workbooks. Its optional paired comparison checks final
+reconstructions, NEST audits, model-selection tables and proxy weights.
 
 The independent controlled check in
 `examples/run_synthetic_resolution_nests.py` pairs ten annual tree proxies
