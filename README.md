@@ -1,5 +1,11 @@
 # npcrflow
 
+Development note (2026-10-03): `codex/ols-kaiser-runtime` restores the user's
+original per-NEST PCA followed by 500 random 2/3-calibration, 1/3-validation
+regressions and yearwise pooling of all accepted NEST x run predictions.
+It also adds matching-window low-resolution screening. This is experimental;
+the frozen v0.6.0 tag and release wheel below are unchanged.
+
 `npcrflow` turns the former multi-notebook NPCR workflow into one importable,
 auditable pipeline.  It reads the raw 21-column Dod2k pickle directly, screens
 proxies with effective degrees of freedom, constructs the original
@@ -61,7 +67,7 @@ cfg = PipelineConfig(
         standardization_period=None,  # or, e.g., (1950, 2000)
         regression="auto",
         regression_candidates=("ridge", "pls", "elasticnet"),
-        n_bootstrap=200,
+        n_bootstrap=500,
         nest=ExplicitNestConfig(
             minimum_span_years=50,
             combination="median",
@@ -389,7 +395,10 @@ PYTHONPATH=src /share/home/lrs/.conda/envs/mybase/bin/python \
 
 Version 0.6.0 currently passes 48 tests, including an end-to-end mixed-
 resolution case in which a native three-year speleothem and annual tree-ring
-means jointly enter a three-year PCA/PCR layer, plus moving-block bootstrap.
+means jointly enter a three-year PCA/PCR layer. The development default uses
+500 random 2/3-calibration, 1/3-validation regressions per NEST, with the
+NEST's PCA built once, and pools accepted NEST x run predictions by year for
+the median and quantiles. Moving-block Bootstrap remains an explicit option.
 
 The primary PDO regression driver is `examples/run_pdo_from_raw_dod2k.py`; the
 associated Slurm launcher is `scripts/run_pdo_raw_dod2k.slurm`. The older

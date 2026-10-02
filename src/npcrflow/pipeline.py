@@ -330,6 +330,24 @@ def save_pipeline_result(
         "metadata_filter_proxy_count": int(result.source_qc["included"].sum()),
         "selected_proxy_count": int(result.screening["selected"].sum()),
         "reconstruction_method": config.reconstruction.method,
+        "uncertainty": {
+            "method": config.reconstruction.bootstrap_method if config.reconstruction.n_bootstrap else "disabled",
+            "requested_members_per_nest": config.reconstruction.n_bootstrap,
+            "successful_replicates": result.reconstruction.reconstruction.attrs.get(
+                "bootstrap_successful_replicates"),
+            "block_years": config.reconstruction.bootstrap_block_years,
+            "random_validation_fraction": config.reconstruction.bootstrap_validation_fraction,
+            "successful_nest_runs": result.reconstruction.reconstruction.attrs.get(
+                "ensemble_successful_nest_runs"),
+            "seed": config.reconstruction.random_seed,
+            "scope": "conditional on screened network and selected model structure",
+            "quantiles_from_reconstruction_ensemble": bool(config.reconstruction.n_bootstrap),
+            "aggregation": (
+                "pool_all_accepted_nest_runs_by_year"
+                if config.reconstruction.bootstrap_method == "random_holdout"
+                else "combine_nests_within_replicate_then_quantiles"
+            ),
+        },
         "candidate_nest_count": int(len(coverage_nests)),
         "accepted_nest_count": int(
             coverage_nests.get("accepted", pd.Series(dtype=bool)).sum()

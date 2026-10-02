@@ -43,6 +43,8 @@ class NativePCRModel:
     amplitude_config: AmplitudeCalibrationConfig
     amplitude_calibrator: AmplitudeCalibrator
     selection_table: pd.DataFrame
+    ensemble_predictions: pd.DataFrame | None = None
+    ensemble_raw_predictions: pd.DataFrame | None = None
 
     def scores(self, matrix: pd.DataFrame) -> pd.DataFrame:
         aligned = matrix.reindex(columns=self.columns)
@@ -446,8 +448,13 @@ def fit_native_pcr(
 
     train_years = np.asarray(list(train_years), dtype=int)
     basis_function = _fit_pairwise_basis if pca_config.method == "pairwise" else _fit_complete_basis
+    random_ensemble = (reconstruction_config.bootstrap_method == "random_holdout"
+                       and reconstruction_config.n_bootstrap > 0)
+    # Legacy NEST -> PCA -> regression: the proxy-only PCA is fitted over
+    # the entire NEST before its observational overlap is randomly split.
+    basis_years = matrix.index if random_ensemble else train_years
     full_basis = basis_function(
-        matrix, train_years, pca_config, reconstruction_config.detrend_proxies,
+        matrix, basis_years, pca_config, reconstruction_config.detrend_proxies,
         reconstruction_config.proxy_weights,
     )
     eigenvalues = full_basis[4]
@@ -456,6 +463,10 @@ def fit_native_pcr(
         if forced_n_components is not None
         else _component_candidates(eigenvalues, pca_config)
     )
+    if random_ensemble and pca_config.selection == "kaiser" and not np.any(
+        eigenvalues > pca_config.kaiser_threshold
+    ):
+        raise RuntimeError("no PC satisfies the Kaiser eigenvalue threshold")
     regression_candidates = (
         [forced_regression]
         if forced_regression is not None
@@ -513,6 +524,15 @@ def fit_native_pcr(
         for n_components in component_candidates
         for alpha in alphas_for(str(regression_name))
     ]
+    if (reconstruction_config.bootstrap_method == "random_holdout"
+            and reconstruction_config.n_bootstrap > 0):
+        from .random_ensemble import fit_random_holdout_pcr
+        if not reconstruction_config.auto_tune:
+            structural_grid = structural_grid[:1]
+        return fit_random_holdout_pcr(
+            matrix, target, train_years, pca_config, reconstruction_config,
+            full_basis, structural_grid, amplitude_options,
+        )
     if not reconstruction_config.auto_tune:
         regression_name, n_components, alpha = structural_grid[0]
         _, amplitude = amplitude_options[0]

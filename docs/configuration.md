@@ -6,6 +6,25 @@ The same fields are available through the typed Python configuration classes.
 
 ## Proxy input and screening
 
+Low-resolution screening defaults to `low_resolution_pairing="window"`.
+Records slower than `native_window_cutoff_years=1.5` use the smallest
+`native_window_bins=(2,3,5,10)` width that contains their median native spacing;
+still coarser records use the ceiling of that spacing. Annual observations
+are averaged over matching half-open windows `[start-.5, end+.5)`.
+Proxy values are averaged only when actually observed in a window: gaps
+remain gaps and each paired window contributes one sample. Screening windows
+start at `period[0]`, or the first available target year if no period is set;
+reconstruction windows still start at their own coverage-NEST start. Their
+width and boundary convention match, but their phases can differ.
+Require every annual target value in a complete-width window; discard partial
+terminal windows and windows containing missing/held-out target years.
+Effective DOF estimates lag-1 correlation only between adjacent **native
+windows**, not between arbitrary observations across gaps. The screening
+audit reports pairing, width, adjacent-pair count and insufficient-adjacency
+fallback. `low_resolution_pairing="annual"` preserves the previous screening
+for an explicitly declared sensitivity. The independent low-resolution
+minimum-overlap setting counts real paired windows, not years.
+
 - `proxy_filter`: exact and storage-rounding-equivalent de-duplication,
   geographic bounds, archive/proxy/climate metadata filters, maximum plausible
   endpoint, and an optional maximum native resolution for controlled ablation.
@@ -80,9 +99,35 @@ The same fields are available through the typed Python configuration classes.
   than their respective thresholds; zero is then rejected at a zero threshold.
   This comparison never changes external sensitivities into acceptance gates.
 - `n_bootstrap`, `bootstrap_block_years`, and
-  `minimum_bootstrap_success_fraction` control moving-block uncertainty. A run
+  `minimum_bootstrap_success_fraction` control ensemble uncertainty. A run
   fails loudly if too few members fit instead of silently reporting a
   one-member "ensemble".
+  The development default is **500** replicates; `n_bootstrap=0` disables it.
+  `bootstrap_method="random_holdout"` is the development default requested
+  by the user. Build PCA once on each full NEST proxy matrix; randomly split
+  its finite observation/PC overlap with `bootstrap_validation_fraction=1/3`
+  and fit regressions on the other 2/3, without replacement, 500 times.
+  The same 500 runs provide median internal CE/RE for NEST acceptance and
+  predictions over its whole coverage. Do not discard individual runs because
+  their CE/RE is negative. Use standard RE (calibration mean) and CE (validation
+  mean); the old Notebook's variance/median denominators are not copied.
+  The full-NEST PCA basis is shared across random regression partitions,
+  as in the original workflow; these are not independent PCA holdouts.
+  Window-resolution layers use the same procedure on complete native windows.
+  Fuse each window-run into its corresponding annual-run before aggregation.
+  Pool **all runs from all accepted NESTs by year**, as in the old Notebook,
+  to obtain empirical 5/25/50/75/95 percentiles. Do not take a median of NEST
+  medians or combine NESTs before computing these quantiles. `ensemble_n`
+  counts pooled finite NEST x run values and can exceed 500. These distributions
+  describe regression-split/network spread, not all climate-reconstruction
+  uncertainty (age models, measurement errors and selection are not sampled).
+  `bootstrap_method="moving_block"` retains the previous with-replacement
+  block sampling, PCA refits, and within-replicate NEST combination as an
+  explicit alternative; `bootstrap_block_years` applies only to that method.
+  For explicit NESTs,
+  `median_full_fit` preserves the pre-Bootstrap adjusted point estimate;
+  `median_raw` remains the full-fit raw prediction. Members are not saved.
+  The timed PDO runner accepts `--n-bootstrap N` (default 500).
 - `evaluation_lowpass_periods` requests diagnostic comparisons such as 10- and
   20-year low-pass correlation and amplitude. These filters are applied only
   after prediction for evaluation and never change target or proxy inputs.

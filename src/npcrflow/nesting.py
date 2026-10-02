@@ -18,6 +18,7 @@ from .resolution_nest import (
     ResolutionNestModel,
     fit_resolution_subnests,
     fuse_resolution_subnests,
+    fuse_resolution_ensemble,
 )
 
 
@@ -47,6 +48,7 @@ class FittedNest:
     low_frequency_constraints: pd.DataFrame
     low_frequency_observations: pd.DataFrame
     internal_row: pd.Series | None
+    ensemble_predictions: pd.DataFrame | None = None
 
 
 def build_coverage_nests(
@@ -329,6 +331,11 @@ def fit_explicit_nests(
             prediction, resolution_constraints = fuse_resolution_subnests(
                 prediction, resolution_models, reconstruction_config
             )
+            ensemble_predictions = model.ensemble_predictions
+            if ensemble_predictions is not None:
+                ensemble_predictions = fuse_resolution_ensemble(
+                    ensemble_predictions, resolution_models, reconstruction_config
+                )
             selected_multiresolution = reconstruction_config.multiresolution
             low_constraints = pd.DataFrame()
             low_observations = pd.DataFrame()
@@ -355,6 +362,13 @@ def fit_explicit_nests(
                     prediction = adjustment.adjusted
                     low_constraints = adjustment.constraints.assign(nest_id=spec.nest_id)
                     low_observations = adjustment.observations.assign(nest_id=spec.nest_id)
+                    if ensemble_predictions is not None:
+                        for column in ensemble_predictions:
+                            ensemble_predictions[column] = variational_low_frequency_adjustment(
+                                ensemble_predictions[column], low_records,
+                                target.reindex(local_train).dropna(),
+                                config=selected_multiresolution,
+                            ).adjusted
             fitted.append(
                 FittedNest(
                     spec=spec,
@@ -372,6 +386,7 @@ def fit_explicit_nests(
                     low_frequency_constraints=low_constraints,
                     low_frequency_observations=low_observations,
                     internal_row=internal,
+                    ensemble_predictions=ensemble_predictions,
                 )
             )
             audit_rows.append(
@@ -392,6 +407,12 @@ def fit_explicit_nests(
                         if internal is not None else np.nan
                     ),
                     "passes_internal_ce_re": passed,
+                    "internal_validation_method": (
+                        "random_holdout" if ensemble_predictions is not None else "contiguous_folds"
+                    ),
+                    "ensemble_successful_members": (
+                        ensemble_predictions.shape[1] if ensemble_predictions is not None else 0
+                    ),
                     "finite_prediction_years": int(prediction.notna().sum()),
                     "accepted_resolution_subnest_count": len(resolution_models),
                     "low_frequency_weight": (
@@ -612,19 +633,37 @@ def _bootstrap_explicit_nests(
 
     from .reconstruction import _moving_block_sample
 
+    if reconstruction_config.n_bootstrap == 0:
+        return []
     rng = np.random.default_rng(reconstruction_config.random_seed)
     bootstrap_fit_config = replace(reconstruction_config, auto_tune=False)
     replicates: list[pd.Series] = []
-    for _ in range(reconstruction_config.n_bootstrap):
+    # Eligibility never changes across replicates. Cache it once, rather than
+    # iterating every resolution-window row 500 times. PCA still refits to
+    # each sampled training matrix; this is not a fixed-basis approximation.
+    prepared = []
+    for member in fitted:
+        local = calibration_years[
+            (calibration_years >= member.spec.start)
+            & (calibration_years <= member.spec.end)
+            & np.isin(calibration_years, member.matrix.index)
+        ]
+        if len(local) < reconstruction_config.nest.minimum_calibration_years:
+            continue
+        calibration_set = set(int(year) for year in local)
+        layers = []
+        for layer in member.resolution_models:
+            window_train = np.asarray([
+                int(index) for index, row in layer.windows.iterrows()
+                if set(range(int(row.window_start), int(row.window_end) + 1)).issubset(calibration_set)
+                and np.isfinite(layer.target.loc[index])
+                and layer.matrix.loc[index, list(layer.native_pids)].notna().any()
+            ], dtype=int)
+            layers.append((layer, window_train))
+        prepared.append((member, local, layers))
+    for iteration in range(reconstruction_config.n_bootstrap):
         members: list[FittedNest] = []
-        for member in fitted:
-            local = calibration_years[
-                (calibration_years >= member.spec.start)
-                & (calibration_years <= member.spec.end)
-                & np.isin(calibration_years, member.matrix.index)
-            ]
-            if len(local) < reconstruction_config.nest.minimum_calibration_years:
-                continue
+        for member, local, layers in prepared:
             sampled = _moving_block_sample(
                 local, reconstruction_config.bootstrap_block_years, rng
             )
@@ -639,17 +678,7 @@ def _bootstrap_explicit_nests(
                 )
                 prediction = model.predict(member.matrix)
                 resolution_models: list[ResolutionNestModel] = []
-                calibration_set = set(int(year) for year in local)
-                for layer in member.resolution_models:
-                    window_train = np.asarray([
-                        int(index)
-                        for index, row in layer.windows.iterrows()
-                        if set(
-                            range(int(row.window_start), int(row.window_end) + 1)
-                        ).issubset(calibration_set)
-                        and np.isfinite(layer.target.loc[index])
-                        and layer.matrix.loc[index, list(layer.native_pids)].notna().any()
-                    ], dtype=int)
+                for layer, window_train in layers:
                     if len(window_train) < 4:
                         continue
                     sampled_windows = _moving_block_sample(
@@ -708,7 +737,50 @@ def _bootstrap_explicit_nests(
         if members:
             replicate, _ = combine_fitted_nests(members, reconstruction_config)
             replicates.append(replicate["median"])
+        logger.info("Bootstrap %d/%d: accepted NESTs=%d, successful replicates=%d",
+                    iteration + 1, reconstruction_config.n_bootstrap,
+                    len(members), len(replicates))
     return replicates
+
+
+def pool_nest_ensembles(fitted, reconstruction, config):
+    """Exact yearwise quantiles across all accepted NEST x run predictions.
+
+    Chunk years in memory rather than creating a large melted table or
+    computing a median of NEST medians (which is not the legacy statistic).
+    """
+    result = reconstruction.copy()
+    result["median"] = result["median"].astype(float)
+    result["median_full_fit"] = result["median"]
+    for first in range(0, len(result), 32):
+        years = result.index[first:first + 32]
+        arrays = []
+        members = sorted(fitted, key=lambda item: (-len(item.core_pids), item.spec.start, -item.spec.end))
+        claimed = np.zeros(len(years), dtype=bool)
+        for member in members:
+            ensemble = member.ensemble_predictions
+            if ensemble is None:
+                continue
+            values = ensemble.reindex(years).to_numpy(float)
+            if config.nest.combination == "densest":
+                values[claimed] = np.nan
+                claimed |= np.isfinite(values).any(axis=1)
+            arrays.append(values)
+        if not arrays:
+            raise RuntimeError("no accepted NEST supplies random reconstruction members")
+        pooled = np.concatenate(arrays, axis=1)
+        finite = np.isfinite(pooled).sum(axis=1)
+        usable = finite > 0
+        result.loc[years, "ensemble_n"] = finite
+        for label, q in (("q05", .05), ("q25", .25), ("median", .5), ("q75", .75), ("q95", .95)):
+            statistic = np.full(len(years), np.nan)
+            statistic[usable] = np.nanquantile(pooled[usable], q, axis=1)
+            result.loc[years, label] = statistic
+    result.attrs["bootstrap_successful_replicates"] = None
+    result.attrs["ensemble_successful_nest_runs"] = sum(
+        member.ensemble_predictions.shape[1] for member in fitted
+        if member.ensemble_predictions is not None)
+    return result
 
 
 def reconstruct_explicit_nests(
@@ -754,20 +826,22 @@ def reconstruct_explicit_nests(
         fitted, reconstruction_config
     )
 
-    replicates = _bootstrap_explicit_nests(
-        fitted, records, target, calibration_years,
-        pca_config, reconstruction_config,
+    random_ensemble = (reconstruction_config.bootstrap_method == "random_holdout"
+                       and reconstruction_config.n_bootstrap > 0)
+    replicates = [] if random_ensemble else _bootstrap_explicit_nests(
+        fitted, records, target, calibration_years, pca_config, reconstruction_config,
     )
     required = int(np.ceil(
         reconstruction_config.n_bootstrap
         * reconstruction_config.minimum_bootstrap_success_fraction
     ))
-    if reconstruction_config.n_bootstrap and len(replicates) < required:
+    if reconstruction_config.n_bootstrap and not random_ensemble and len(replicates) < required:
         raise RuntimeError(
             f"only {len(replicates)}/{reconstruction_config.n_bootstrap} "
             f"explicit-NEST bootstrap replicates succeeded; required {required}"
         )
     if replicates:
+        reconstruction["median_full_fit"] = reconstruction["median"]
         values = pd.concat(replicates, axis=1).reindex(reconstruction.index).to_numpy(float)
         finite = np.isfinite(values).sum(axis=1)
         usable = finite > 0
@@ -779,6 +853,9 @@ def reconstruct_explicit_nests(
             statistic[usable] = np.nanquantile(values[usable], quantile, axis=1)
             reconstruction[name] = statistic
         reconstruction["ensemble_n"] = finite
+    reconstruction.attrs["bootstrap_successful_replicates"] = len(replicates)
+    if random_ensemble:
+        reconstruction = pool_nest_ensembles(fitted, reconstruction, reconstruction_config)
 
     validation_tables: list[pd.DataFrame] = []
     if reconstruction_config.full_network_outer_validation:

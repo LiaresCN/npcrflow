@@ -4,7 +4,7 @@
 #SBATCH --nodelist=c061
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=24G
-#SBATCH --time=02:00:00
+#SBATCH --time=24:00:00
 #SBATCH --output=/share/home/lrs/codex/projects/npcrflow/logs/pdo_ols_kaiser_runtime-%j.out
 
 set -euo pipefail

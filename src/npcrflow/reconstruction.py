@@ -991,7 +991,11 @@ def reconstruct_native_missing(
     raw_ensemble: list[np.ndarray] = []
     bootstrap_errors: list[str] = []
     bootstrap_fit_config = replace(reconstruction_config, auto_tune=False)
-    for _ in range(reconstruction_config.n_bootstrap):
+    random_ensemble = model.ensemble_predictions is not None
+    if random_ensemble:
+        ensemble = list(model.ensemble_predictions.to_numpy(float).T)
+        raw_ensemble = list(model.ensemble_raw_predictions.to_numpy(float).T)
+    for _ in range(0 if random_ensemble else reconstruction_config.n_bootstrap):
         sampled = _moving_block_sample(
             calibration_years,
             reconstruction_config.bootstrap_block_years,

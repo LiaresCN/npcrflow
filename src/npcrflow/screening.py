@@ -11,6 +11,7 @@ from scipy import stats
 from .config import ScreeningConfig
 from .data import annualize_record
 from .records import ProxyCollection, ProxyRecord
+from .time_windows import observed_window_means, window_table
 
 
 def _effectively_constant(values: np.ndarray) -> bool:
@@ -20,13 +21,13 @@ def _effectively_constant(values: np.ndarray) -> bool:
     return bool(float(np.ptp(values)) <= 32.0 * np.finfo(float).eps * scale)
 
 
-def _lag1_on_consecutive(series: pd.Series) -> float:
+def _lag1_on_consecutive(series: pd.Series, year_step: int = 1) -> float:
     series = series.dropna().sort_index()
     if len(series) < 3:
         return 0.0
     index = series.index.to_numpy(dtype=int)
     values = series.to_numpy(dtype=float)
-    adjacent = np.diff(index) == 1
+    adjacent = np.diff(index) == year_step
     if adjacent.sum() < 2:
         return 0.0
     first = values[:-1][adjacent]
@@ -37,17 +38,22 @@ def _lag1_on_consecutive(series: pd.Series) -> float:
     return float(np.clip(result, -0.99, 0.99)) if np.isfinite(result) else 0.0
 
 
-def effective_sample_size(x: pd.Series, y: pd.Series) -> float:
+def effective_sample_size(x: pd.Series, y: pd.Series, year_step: int = 1) -> float:
     joined = pd.concat([x.rename("x"), y.rename("y")], axis=1, join="inner").dropna()
     n = len(joined)
     if n < 3:
         return float(n)
-    product = _lag1_on_consecutive(joined["x"]) * _lag1_on_consecutive(joined["y"])
+    product = (_lag1_on_consecutive(joined["x"], year_step)
+               * _lag1_on_consecutive(joined["y"], year_step))
     value = n * (1.0 - product) / (1.0 + product)
     return float(np.clip(value, 3.0, float(n)))
 
 
-def correlation_with_effective_dof(x: pd.Series, y: pd.Series) -> tuple[float, float, float, int]:
+def correlation_with_effective_dof(
+    x: pd.Series, y: pd.Series, year_step: int = 1,
+) -> tuple[float, float, float, int]:
+    if year_step < 1:
+        raise ValueError("year_step must be positive")
     joined = pd.concat([x.rename("x"), y.rename("y")], axis=1, join="inner").dropna()
     n = len(joined)
     x_values = joined["x"].to_numpy(float)
@@ -55,7 +61,7 @@ def correlation_with_effective_dof(x: pd.Series, y: pd.Series) -> tuple[float, f
     if n < 3 or _effectively_constant(x_values) or _effectively_constant(y_values):
         return np.nan, np.nan, float(n), n
     r = float(np.corrcoef(x_values, y_values)[0, 1])
-    n_eff = effective_sample_size(joined["x"], joined["y"])
+    n_eff = effective_sample_size(joined["x"], joined["y"], year_step)
     denominator = max(1.0 - r * r, np.finfo(float).eps)
     t_value = r * np.sqrt(max(n_eff - 2.0, 0.0) / denominator)
     p_value = float(2.0 * stats.t.sf(abs(t_value), max(n_eff - 2.0, 1.0)))
@@ -113,6 +119,39 @@ def _candidate_months(record: ProxyRecord, config: ScreeningConfig) -> tuple[tup
     return tuple(unique)
 
 
+def _native_screening_pair(
+    record: ProxyRecord, target: pd.Series, config: ScreeningConfig,
+) -> tuple[pd.Series, pd.Series, int]:
+    """Complete observational windows only, using actual native proxy values.
+
+    Anchor windows at the declared screening start (or first target year).
+    Missing target years and partial terminal windows invalidate a window:
+    held-out years can never leak into a training-only screening calculation.
+    Records beyond the declared bins use ceil(native resolution), but this
+    does not make them eligible for the <=10-year reconstruction layers.
+    """
+    width = next((value for value in config.native_window_bins
+                  if record.resolution <= value), int(np.ceil(record.resolution)))
+    finite_target = target.dropna().sort_index()
+    if finite_target.empty:
+        empty = pd.Series(dtype=float)
+        return empty, empty.copy(), width
+    start, end = (config.period if config.period is not None
+                  else (int(finite_target.index.min()), int(finite_target.index.max())))
+    windows = window_table(start, end, width)
+    local = finite_target.loc[start:end]
+    groups = start + ((local.index.to_numpy(int) - start) // width) * width
+    means = local.groupby(groups).mean().reindex(windows.index)
+    counts = local.groupby(groups).count().reindex(windows.index, fill_value=0)
+    complete = (windows.window_year_count == width) & (counts == width)
+    # Values outside the declared period must not sneak in via half-year edges.
+    inside_period = (record.time >= start) & (record.time < end + 1)
+    proxy = observed_window_means(
+        record.time[inside_period], record.value[inside_period], windows,
+    ).where(complete)
+    return proxy, means.where(complete), width
+
+
 def _screen_one(record: ProxyRecord, target: pd.Series, config: ScreeningConfig) -> dict[str, object]:
     required_overlap = config.min_overlap
     if (
@@ -123,23 +162,32 @@ def _screen_one(record: ProxyRecord, target: pd.Series, config: ScreeningConfig)
         required_overlap = config.low_resolution_min_overlap
     evaluations: list[dict[str, object]] = []
     for months in _candidate_months(record, config):
-        proxy = annualize_record(
-            record,
-            months=months,
-            season_year=config.season_year,
-            minimum_month_fraction=config.minimum_month_fraction,
-        )
-        local_target = target
-        if config.period is not None:
-            start, end = config.period
-            proxy = proxy.loc[(proxy.index >= start) & (proxy.index <= end)]
-            local_target = target.loc[(target.index >= start) & (target.index <= end)]
+        native = (config.low_resolution_pairing == "window"
+                  and np.isfinite(record.resolution)
+                  and record.resolution > config.native_window_cutoff_years)
+        if native:
+            proxy, local_target, step = _native_screening_pair(record, target, config)
+        else:
+            proxy = annualize_record(
+                record, months=months, season_year=config.season_year,
+                minimum_month_fraction=config.minimum_month_fraction,
+            )
+            local_target = target
+            step = 1
+            if config.period is not None:
+                start, end = config.period
+                proxy = proxy.loc[(proxy.index >= start) & (proxy.index <= end)]
+                local_target = target.loc[(target.index >= start) & (target.index <= end)]
         if config.detrend:
             proxy = _linear_detrend(proxy)
             local_target = _linear_detrend(local_target)
-        r, p_value, n_eff, n = correlation_with_effective_dof(proxy, local_target)
+        r, p_value, n_eff, n = correlation_with_effective_dof(proxy, local_target, step)
+        paired = pd.concat([proxy, local_target], axis=1).dropna()
+        lag_pairs = int((np.diff(paired.index.to_numpy(int)) == step).sum())
         evaluations.append(
-            {"months": months, "r": r, "p_effective_raw": p_value, "n_eff": n_eff, "n_overlap": n}
+            {"months": months, "r": r, "p_effective_raw": p_value, "n_eff": n_eff,
+             "n_overlap": n, "screening_pairing": "native_window" if native else "annual",
+             "screening_window_years": step, "lag1_pair_count": lag_pairs}
         )
     p_values = [float(item["p_effective_raw"]) for item in evaluations]
     adjusted = _holm(p_values) if config.multiple_testing == "holm" else np.asarray(p_values)
@@ -166,6 +214,10 @@ def _screen_one(record: ProxyRecord, target: pd.Series, config: ScreeningConfig)
         "lat": record.lat,
         "lon": record.lon,
         "native_resolution": record.resolution,
+        "screening_pairing": best["screening_pairing"],
+        "screening_window_years": best["screening_window_years"],
+        "lag1_pair_count": best["lag1_pair_count"],
+        "dof_fallback_no_adjacent_pairs": best["lag1_pair_count"] < 2,
         "best_months": ",".join(map(str, best["months"])),
         "n_seasons_tested": len(evaluations),
         "n_overlap": int(best["n_overlap"]),

@@ -393,6 +393,7 @@ class ModelTests(unittest.TestCase):
             matrix, target, years,
             PCAConfig(selection="kaiser", max_components=8),
             ReconstructionConfig(
+                n_bootstrap=0,
                 regression="ols", regression_candidates=("ols",),
                 ridge_alphas=(0.0, 1.0, 10.0), auto_tune=True,
                 validation_block_years=34, min_ce=0.1, min_re=0.1,

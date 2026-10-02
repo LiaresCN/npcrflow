@@ -82,8 +82,20 @@ class ScreeningConfig:
     multiple_testing: Literal["holm", "none"] = "holm"
     proxy_multiple_testing: Literal["fdr_bh", "holm", "none"] = "fdr_bh"
     archive_max_counts: tuple[tuple[str, int], ...] = ()
+    low_resolution_pairing: Literal["window", "annual"] = "window"
+    native_window_cutoff_years: float = 1.5
+    native_window_bins: tuple[int, ...] = (2, 3, 5, 10)
 
     def __post_init__(self) -> None:
+        if self.low_resolution_pairing not in {"window", "annual"}:
+            raise ValueError("low_resolution_pairing must be 'window' or 'annual'")
+        if self.native_window_cutoff_years <= 0:
+            raise ValueError("native_window_cutoff_years must be positive")
+        if (not self.native_window_bins
+                or tuple(sorted(set(self.native_window_bins))) != self.native_window_bins
+                or any(not isinstance(width, int) or width <= self.native_window_cutoff_years
+                       for width in self.native_window_bins)):
+            raise ValueError("native_window_bins must be increasing integer widths above cutoff")
         if self.period is not None and self.period[0] > self.period[1]:
             raise ValueError("screening period must be increasing")
         if not 0 < self.p_threshold <= 1:
@@ -393,7 +405,9 @@ class ReconstructionConfig:
     evaluation_period_bands: tuple[tuple[float, float], ...] = ((10.0, 30.0),)
     validation_block_years: int = 20
     minimum_internal_train_samples: int = 20
-    n_bootstrap: int = 200
+    n_bootstrap: int = 500
+    bootstrap_method: Literal["random_holdout", "moving_block"] = "random_holdout"
+    bootstrap_validation_fraction: float = 1.0 / 3.0
     bootstrap_block_years: int = 5
     minimum_bootstrap_success_fraction: float = 0.80
     random_seed: int = 20260926
@@ -415,6 +429,10 @@ class ReconstructionConfig:
     nest: ExplicitNestConfig = field(default_factory=ExplicitNestConfig)
 
     def __post_init__(self) -> None:
+        if self.bootstrap_method not in {"random_holdout", "moving_block"}:
+            raise ValueError("bootstrap_method must be 'random_holdout' or 'moving_block'")
+        if not 0 < self.bootstrap_validation_fraction < 0.5:
+            raise ValueError("bootstrap_validation_fraction must be between 0 and 0.5")
         if self.internal_ce_re_comparison not in {"ge", "gt"}:
             raise ValueError("internal_ce_re_comparison must be 'ge' or 'gt'")
         if self.interpolation not in {"none", "archive_linear"}:
@@ -447,6 +465,8 @@ class ReconstructionConfig:
             raise ValueError("external_validation_fraction must be between 0 and 0.5")
         if self.n_bootstrap < 0:
             raise ValueError("n_bootstrap cannot be negative")
+        if self.bootstrap_block_years < 1:
+            raise ValueError("bootstrap_block_years must be positive")
         if not 0 < self.minimum_bootstrap_success_fraction <= 1:
             raise ValueError("minimum_bootstrap_success_fraction must be in (0, 1]")
         if self.strong_skill_threshold < 0:

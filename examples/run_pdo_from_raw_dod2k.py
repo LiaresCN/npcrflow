@@ -111,7 +111,7 @@ def build_config(
             # robustness uses only the two directed 2/3-to-1/3 edge splits.
             validation_block_years=34,
             minimum_internal_train_samples=20,
-            n_bootstrap=50,
+            n_bootstrap=500,
             bootstrap_block_years=5,
             minimum_bootstrap_success_fraction=0.80,
             random_seed=20260926,

@@ -1,4 +1,4 @@
-"""Time the user-selected OLS/Kaiser PDO baseline, without optional tests."""
+"""Time the OLS/Kaiser PDO baseline with the original NEST random-run ensemble."""
 
 import argparse
 from dataclasses import asdict, replace
@@ -16,7 +16,7 @@ from npcrflow.diagnostics import observation_fit_table
 from run_pdo_from_raw_dod2k import PROXIES, TARGET, build_config
 
 
-def build_runtime_config(output_directory: Path):
+def build_runtime_config(output_directory: Path, n_bootstrap: int = 500):
     base = build_config(amplitude_method="auto", multiresolution_enabled=False)
     return replace(
         base,
@@ -26,7 +26,9 @@ def build_runtime_config(output_directory: Path):
             regression="ols", regression_candidates=("ols",),
             ridge_alphas=(0.0,), auto_tune=True,
             min_ce=0.1, min_re=0.1, internal_ce_re_comparison="gt",
-            n_bootstrap=0, full_network_outer_validation=False,
+            n_bootstrap=n_bootstrap, bootstrap_method="random_holdout",
+            bootstrap_validation_fraction=1.0 / 3.0,
+            full_network_outer_validation=False,
             rescreen_outer_folds=False,
             amplitude=replace(
                 base.reconstruction.amplitude,
@@ -44,13 +46,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--output-directory", type=Path,
-        default=Path("results/pdo_ols_kaiser8_strict010_two_variances_timing"),
+        default=Path("results/pdo_ols_kaiser8_native_screening_bootstrap500"),
     )
+    parser.add_argument("--n-bootstrap", type=int, default=500,
+                        help="Random 2/3-to-1/3 repetitions per NEST; 0 disables the ensemble")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     if args.output_directory.exists() and any(args.output_directory.iterdir()):
         raise FileExistsError(f"Refusing to overwrite {args.output_directory}")
-    config = build_runtime_config(args.output_directory)
+    config = build_runtime_config(args.output_directory, args.n_bootstrap)
     args.output_directory.mkdir(parents=True, exist_ok=True)
     revision = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], text=True,

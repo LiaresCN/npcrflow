@@ -9,10 +9,12 @@ import numpy as np
 import pandas as pd
 from scipy import sparse
 from scipy.sparse.linalg import lsqr
+from scipy.sparse.linalg import splu
 
 from .config import PCAConfig, ReconstructionConfig
 from .model import NativePCRModel, fit_native_pcr
 from .records import ProxyRecord
+from .time_windows import observed_window_means, window_table as _window_table
 
 
 @dataclass
@@ -51,20 +53,6 @@ def assign_resolution_bands(
     return {width: values for width, values in result.items() if values}
 
 
-def _window_table(start: int, end: int, width: int) -> pd.DataFrame:
-    starts = np.arange(start, end + 1, width, dtype=int)
-    ends = np.minimum(starts + width - 1, end)
-    return pd.DataFrame(
-        {
-            "window_id": starts,
-            "window_start": starts,
-            "window_end": ends,
-            "window_center": (starts + ends) / 2.0,
-            "window_year_count": ends - starts + 1,
-        }
-    ).set_index("window_id")
-
-
 def _raw_record_window_means(
     record: ProxyRecord,
     windows: pd.DataFrame,
@@ -94,25 +82,7 @@ def _raw_record_window_means(
                 f"{standardization_period} within the training years"
             )
         source_values = (source_values - mean) / scale
-    positions = np.searchsorted(
-        windows["window_start"].to_numpy(float) - 0.5,
-        record.time,
-        side="right",
-    ) - 1
-    safe_positions = np.clip(positions, 0, len(windows) - 1)
-    upper = windows["window_end"].to_numpy(float)[safe_positions] + 0.5
-    inside = (
-        (positions >= 0)
-        & (record.time < upper)
-        & np.isfinite(record.time)
-        & np.isfinite(source_values)
-    )
-    observed = pd.Series(
-        source_values[inside],
-        index=windows.index.to_numpy()[positions[inside]],
-        dtype=float,
-    )
-    return observed.groupby(level=0).mean().reindex(windows.index).rename(record.pid)
+    return observed_window_means(record.time, source_values, windows).rename(record.pid)
 
 
 def build_resolution_matrix(
@@ -398,3 +368,85 @@ def fuse_resolution_subnests(
     )[0]
     result = core + pd.Series(increment, index=core.index)
     return result.rename(core.name), pd.DataFrame(audit)
+
+
+def fuse_resolution_ensemble(
+    core: pd.DataFrame,
+    models: Sequence[ResolutionNestModel],
+    reconstruction_config: ReconstructionConfig,
+) -> pd.DataFrame:
+    """Apply the same linear fusion with shared window operators and sparse solves.
+
+    Member-specific core SD is preserved in its operator, as in the scalar
+    implementation. Proxy observations remain untouched. No run is collapsed
+    to a median before fusion or before final cross-NEST pooling.
+    """
+    if not models or reconstruction_config.nest.subnest_constraint_weight == 0:
+        return core.copy()
+    values = core.to_numpy(float)
+    years = core.index.to_numpy(int)
+    # Fixed NEST scores imply an identical finite support across regressions.
+    finite = np.isfinite(values[:, 0])
+    if not np.all(np.isfinite(values) == finite[:, None]):
+        raise RuntimeError("random ensemble members have inconsistent annual support")
+    supported = np.flatnonzero(finite)
+    rows = [sparse.coo_matrix(
+        (np.ones(len(supported)), (np.arange(len(supported)), supported)),
+        shape=(len(supported), len(years)),
+    ).tocsr()]
+    rhs = [np.zeros((len(supported), core.shape[1]))]
+    weight = np.sqrt(reconstruction_config.nest.subnest_constraint_weight)
+    for layer in models:
+        members = layer.model.ensemble_predictions
+        if members is None:
+            continue
+        aligned = members.reindex(columns=core.columns)
+        native = layer.matrix[list(layer.native_pids)].notna().any(axis=1)
+        for window_id in layer.prediction.dropna().index:
+            if not native.loc[window_id]:
+                continue
+            window = layer.windows.loc[window_id]
+            indices = np.flatnonzero((years >= window.window_start)
+                                     & (years <= window.window_end) & finite)
+            predicted = aligned.loc[window_id].to_numpy(float)
+            if not len(indices):
+                continue
+            # A rare failed native fit supplies no constraint for that run.
+            # Handle such a case exactly with the existing scalar method.
+            if not np.isfinite(predicted).all():
+                result = core.copy()
+                for run in core.columns:
+                    layers = [replace(item, prediction=item.model.ensemble_predictions[run].where(
+                        item.matrix[list(item.native_pids)].notna().any(axis=1)))
+                              for item in models if run in item.model.ensemble_predictions]
+                    result[run], _ = fuse_resolution_subnests(core[run], layers, reconstruction_config)
+                return result
+            rows.append(sparse.coo_matrix(
+                (np.full(len(indices), weight / len(indices)),
+                 (np.zeros(len(indices), dtype=int), indices)),
+                shape=(1, len(years)),
+            ).tocsr())
+            rhs.append(((predicted - values[indices].mean(axis=0)) * weight)[None, :])
+    if len(rows) == 1:
+        return core.copy()
+    design = sparse.vstack(rows).tocsr()
+    normal = (design.T @ design).tocsc()
+    right = design.T @ np.vstack(rhs)
+    if len(years) >= 3 and reconstruction_config.nest.subnest_smoothness_multiplier > 0:
+        difference = sparse.diags(
+            [np.ones(len(years) - 2), -2 * np.ones(len(years) - 2), np.ones(len(years) - 2)],
+            [0, 1, 2], shape=(len(years) - 2, len(years)),
+        ).tocsc()
+        penalty = (difference.T @ difference).tocsc()
+        multiplier = reconstruction_config.nest.subnest_smoothness_multiplier
+        # Multiplying scalar objective by core SD^2 changes only smoothness.
+        scales = np.maximum(np.nanstd(values, axis=0), 1e-6)
+        increments = np.column_stack([
+            splu(normal + multiplier * scales[run]**2 * penalty).solve(right[:, run])
+            for run in range(core.shape[1])
+        ])
+    else:
+        # Solve only finite state entries when no smoothness connects gaps.
+        increments = np.zeros_like(values)
+        increments[finite] = splu(normal[finite][:, finite]).solve(right[finite])
+    return pd.DataFrame(values + increments, index=core.index, columns=core.columns)
