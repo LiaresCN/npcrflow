@@ -61,12 +61,19 @@ matrices or workbooks. Optimized complete runs and their numerical/timing
 cross-checks remain pending; do not describe v0.6.0 as frozen yet. The
 annual-only ablation changes the coverage grid and cannot alone isolate fusion.
 
-Completed supplementary references on the identical screened network give
-`r=0.7884`, SD ratio `0.6246` for Kaiser, and `r=0.7930`, SD ratio `0.6274`
-for 90%-variance retention. Both respect the declared five-PC safety cap;
-Kaiser is therefore not an unlimited reproduction of the former notebook.
-`kaiser_cv` is still running. These references do not replace the predeclared
-blocked-CV primary method merely because their apparent correlation is larger.
+All supplementary PCA references have completed on the identical screened
+network and raw-input hashes:
+
+| PCA selection | Accepted coverage NESTs | Observation r | SD ratio | Annual interval |
+| --- | ---: | ---: | ---: | --- |
+| Kaiser + internal CV | 367 | 0.7669 | 0.6331 | 851–2011 |
+| Kaiser | 360 | 0.7884 | 0.6246 | 851–2011 |
+| 90%-variance retention | 362 | 0.7930 | 0.6274 | 552–2011 |
+
+All respect the declared five-PC safety cap; Kaiser is therefore not an
+unlimited reproduction of the former notebook. Internal CE/RE gates pass for
+all retained layers in these references. They do not replace the predeclared
+blocked-CV primary method merely because apparent correlation is larger.
 
 The score-cache engineering benchmark
 (`examples/benchmark_score_cache.py`, reference `2615aa1`) uses 40 synthetic
