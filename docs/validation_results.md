@@ -24,7 +24,7 @@ main evidence is defined in the update above.
 
 ## PDO
 
-### Version 0.6.0 explicit-NEST verification (in progress)
+### Version 0.6.0 explicit-NEST verification
 
 The annual-only ablation uses the same unfiltered PDO, d18O scope, screening
 and calibration period as the primary mixed-resolution run, with native
@@ -60,7 +60,13 @@ The compact outputs total about 24.3 MB, without NEST matrices or workbooks.
 Only one Coral proxy-year is interpolated, with no endpoint extrapolation;
 native resolution-layer records remain unfilled. The completed single-CPU
 pre-score-cache run takes 1:13:39 and uses a maximum of about 384 MB RAM.
-Its paired score-cache run is finishing; do not describe v0.6.0 as frozen yet. The
+Its paired score-cache run completes in 1:00:40 with about 393 MB maximum RAM.
+Both use one CPU on c061, identical raw-input hashes and all settings except
+the output directory. The complete wall time falls by 779 seconds (17.6%).
+The full reconstruction, NEST summary, model-selection table, proxy weights,
+screening, interpolation audit and observation-statistics tables match within
+`1e-10`; maximum annual prediction difference is exactly zero. This is one
+controlled complete PDO benchmark, not a universal speed guarantee. The
 annual-only ablation changes the coverage grid and cannot alone isolate fusion.
 
 The earlier development run (`pdo_v060_explicit_nests_smoke`, four allocated
@@ -90,7 +96,8 @@ time from 3.12 to 2.30 seconds, about 26%, and score calculations from 171 to
 26. Model-selection tables, internal CE/RE and full-period predictions match
 within `1e-12`; maximum prediction difference was zero. This timing measures
 one tuned PCR, not screening, uncertainty, external sensitivities or the
-complete 397-NEST PDO workflow. A matched complete PDO timing is pending.
+complete 397-NEST PDO workflow. Its complete matched PDO result is reported
+above: 17.6% less wall time with the same final reconstruction and model choices.
 
 `examples/audit_explicit_nest_outputs.py` reads completed outputs without
 changing them. It checks unique coverage networks, internal CE/RE gates,
