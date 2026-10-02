@@ -2,7 +2,7 @@
 #SBATCH --job-name=npcr-v060
 #SBATCH --partition=hujun
 #SBATCH --nodelist=c061
-#SBATCH --cpus-per-task=4
+#SBATCH --cpus-per-task=1
 #SBATCH --mem=24G
 #SBATCH --time=04:00:00
 #SBATCH --output=/share/home/lrs/codex/projects/npcrflow/logs/pdo_v060_explicit_nests-%j.out

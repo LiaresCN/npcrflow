@@ -1,6 +1,7 @@
 """Declared PCA references on the identical unfiltered d18O PDO network."""
 
 import argparse
+import logging
 from dataclasses import replace
 
 from npcrflow import run_pipeline
@@ -8,6 +9,7 @@ from run_pdo_from_raw_dod2k import PROXIES, TARGET, build_config
 
 
 def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     parser = argparse.ArgumentParser()
     parser.add_argument("selection", choices=("kaiser_cv", "kaiser", "variance"))
     args = parser.parse_args()

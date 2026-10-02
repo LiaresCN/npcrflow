@@ -94,15 +94,25 @@ def _raw_record_window_means(
                 f"{standardization_period} within the training years"
             )
         source_values = (source_values - mean) / scale
-    values: list[float] = []
-    for row in windows.itertuples():
-        inside = (
-            (record.time >= float(row.window_start) - 0.5)
-            & (record.time < float(row.window_end) + 0.5)
-            & np.isfinite(source_values)
-        )
-        values.append(float(np.mean(source_values[inside])) if inside.any() else np.nan)
-    return pd.Series(values, index=windows.index, name=record.pid, dtype=float)
+    positions = np.searchsorted(
+        windows["window_start"].to_numpy(float) - 0.5,
+        record.time,
+        side="right",
+    ) - 1
+    safe_positions = np.clip(positions, 0, len(windows) - 1)
+    upper = windows["window_end"].to_numpy(float)[safe_positions] + 0.5
+    inside = (
+        (positions >= 0)
+        & (record.time < upper)
+        & np.isfinite(record.time)
+        & np.isfinite(source_values)
+    )
+    observed = pd.Series(
+        source_values[inside],
+        index=windows.index.to_numpy()[positions[inside]],
+        dtype=float,
+    )
+    return observed.groupby(level=0).mean().reindex(windows.index).rename(record.pid)
 
 
 def build_resolution_matrix(
@@ -119,12 +129,9 @@ def build_resolution_matrix(
     """Aggregate annual predictors and target onto native windows, without interpolation."""
 
     windows = _window_table(start, end, width)
-    matrix = pd.DataFrame(index=windows.index)
-    for pid in annual_matrix.columns:
-        matrix[pid] = [
-            annual_matrix.loc[row.window_start : row.window_end, pid].mean(skipna=True)
-            for row in windows.itertuples()
-        ]
+    annual = annual_matrix.loc[start:end]
+    annual_window_ids = start + ((annual.index.to_numpy(int) - start) // width) * width
+    matrix = annual.groupby(annual_window_ids).mean().reindex(windows.index)
     for pid in native_pids:
         matrix[pid] = _raw_record_window_means(
             records[pid],
@@ -132,15 +139,9 @@ def build_resolution_matrix(
             standardization_period,
             standardization_years,
         )
-    window_target = pd.Series(
-        [
-            target.loc[row.window_start : row.window_end].mean(skipna=True)
-            for row in windows.itertuples()
-        ],
-        index=windows.index,
-        name=target.name,
-        dtype=float,
-    )
+    observed_target = target.loc[start:end]
+    target_window_ids = start + ((observed_target.index.to_numpy(int) - start) // width) * width
+    window_target = observed_target.groupby(target_window_ids).mean().reindex(windows.index)
     matrix.attrs["proxy_metadata"] = {
         pid: {
             "lat": records[pid].lat,

@@ -94,6 +94,36 @@ class NativePCRModel:
         )
 
 
+def _pairwise_correlation(values: np.ndarray, minimum_overlap: int) -> np.ndarray:
+    """Pearson matrix on each pair's finite overlap, without filling values.
+
+    Masked sums evaluate all pairwise overlaps in one matrix operation. The
+    covariance uses each pair's own mean and variance, matching np.corrcoef
+    on the finite intersection rather than assuming one common sample grid.
+    """
+
+    finite = np.isfinite(values)
+    mask = finite.astype(float)
+    observed = np.where(finite, values, 0.0)
+    overlap = mask.T @ mask
+    sums = observed.T @ mask
+    squared_sums = (observed**2).T @ mask
+    cross = observed.T @ observed
+    safe_overlap = np.maximum(overlap, 1.0)
+    covariance = cross - sums * sums.T / safe_overlap
+    variance = np.maximum(squared_sums - sums**2 / safe_overlap, 0.0)
+    # A constant finite intersection may leave a small positive cancellation
+    # residual. Treat it as zero rather than inventing a perfect correlation.
+    variance[variance <= 64 * np.finfo(float).eps * squared_sums] = 0.0
+    denominator = np.sqrt(variance * variance.T)
+    correlation = np.zeros_like(covariance)
+    valid = (overlap >= minimum_overlap) & (denominator > 0)
+    np.divide(covariance, denominator, out=correlation, where=valid)
+    np.clip(correlation, -1.0, 1.0, out=correlation)
+    np.fill_diagonal(correlation, 1.0)
+    return correlation
+
+
 def _fit_pairwise_basis(
     matrix: pd.DataFrame,
     fit_years: Iterable[int],
@@ -132,15 +162,7 @@ def _fit_pairwise_basis(
     means = np.nanmean(residual, axis=0)
     scales = np.nanstd(residual, axis=0, ddof=1)
     standardized = (residual - means) / scales
-    count = len(valid_columns)
-    correlation = np.eye(count)
-    for first in range(count):
-        for second in range(first + 1, count):
-            overlap = np.isfinite(standardized[:, first]) & np.isfinite(standardized[:, second])
-            if overlap.sum() >= config.min_pairwise_overlap:
-                value = float(np.corrcoef(standardized[overlap, first], standardized[overlap, second])[0, 1])
-                if np.isfinite(value):
-                    correlation[first, second] = correlation[second, first] = value
+    correlation = _pairwise_correlation(standardized, config.min_pairwise_overlap)
     correlation *= np.sqrt(np.outer(proxy_weights, proxy_weights))
     # Pairwise correlations need not form a positive-semidefinite matrix.  A
     # clipped eigendecomposition is the nearest stable spectral basis needed

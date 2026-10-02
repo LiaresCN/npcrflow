@@ -13,6 +13,9 @@
 - Limited candidate fitting to PC scores from training years, avoiding repeated
   out-of-calibration score solves. A paired full-matrix/optimized test also
   covers duplicated bootstrap years and verifies identical full predictions.
+- Vectorized finite-overlap correlations and grouped native-window means;
+  finite-pair Pearson and full-period prediction checks verify the same
+  numerical method, including constant overlaps, missing years and edges.
 - Added 2/3/5/10-year resolution sub-NESTs. Coarser proxy observations join
   PCA and regression together with annual proxies and targets aggregated onto
   identical native windows; proxy gaps are never filled to annual values.

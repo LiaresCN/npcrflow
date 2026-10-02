@@ -25,7 +25,7 @@ from npcrflow.config import (
 from npcrflow.amplitude import fit_amplitude_calibrator
 from npcrflow.data import annualize_record, load_observations, load_proxy_database
 from npcrflow.deduplicate import deduplicate_frame
-from npcrflow.model import _component_candidates, _score_rows, fit_native_pcr
+from npcrflow.model import _component_candidates, _pairwise_correlation, _score_rows, fit_native_pcr
 from npcrflow.pipeline import filter_records_with_report, run_pipeline
 from npcrflow.nesting import explicit_nest_validation
 from npcrflow.records import ProxyCollection, ProxyRecord
@@ -443,6 +443,63 @@ class ModelTests(unittest.TestCase):
             atol=1e-12, rtol=1e-12, equal_nan=True,
         )
 
+    def test_vectorized_pairwise_pca_matches_finite_overlap_pearson(self):
+        rng = np.random.default_rng(68)
+        values = rng.normal(size=(120, 7))
+        values[rng.random(values.shape) < 0.25] = np.nan
+        values[:115, -1] = np.nan
+        expected = np.eye(values.shape[1])
+        for first in range(values.shape[1]):
+            for second in range(first + 1, values.shape[1]):
+                overlap = np.isfinite(values[:, first]) & np.isfinite(values[:, second])
+                if overlap.sum() >= 8:
+                    expected[first, second] = expected[second, first] = np.corrcoef(
+                        values[overlap, first], values[overlap, second]
+                    )[0, 1]
+        np.testing.assert_allclose(_pairwise_correlation(values, 8), expected, atol=1e-14)
+
+    def test_pairwise_constant_overlap_does_not_invent_correlation(self):
+        values = np.full((60, 2), np.nan)
+        values[:30, 0] = 0.3
+        values[:30, 1] = 0.33
+        values[30:45, 0] = np.arange(15)
+        values[45:, 1] = np.arange(15)
+        result = _pairwise_correlation(values, 8)
+        self.assertEqual(result[0, 1], 0.0)
+        self.assertEqual(result[1, 0], 0.0)
+
+    def test_vectorized_pca_preserves_native_full_period_predictions(self):
+        rng = np.random.default_rng(69)
+        years = np.arange(1800, 2000)
+        truth = np.sin((years - 1800) / 8.0)
+        matrix = pd.DataFrame({
+            f"p{i}": truth + rng.normal(0, 0.2, len(years))
+            for i in range(8)
+        }, index=years)
+        matrix.mask(rng.random(matrix.shape) < 0.1, inplace=True)
+        target = pd.Series(truth, index=years)
+        pca = PCAConfig(selection="fixed", n_components=2, max_components=2)
+        config = ReconstructionConfig(auto_tune=False, ridge_alphas=(0.1,), n_bootstrap=0)
+        fast = fit_native_pcr(matrix, target, years[-80:], pca, config)
+
+        def legacy_correlation(values, minimum):
+            result = np.eye(values.shape[1])
+            for first in range(values.shape[1]):
+                for second in range(first + 1, values.shape[1]):
+                    finite = np.isfinite(values[:, first]) & np.isfinite(values[:, second])
+                    if finite.sum() >= minimum:
+                        value = np.corrcoef(values[finite, first], values[finite, second])[0, 1]
+                        if np.isfinite(value):
+                            result[first, second] = result[second, first] = value
+            return result
+
+        with patch("npcrflow.model._pairwise_correlation", side_effect=legacy_correlation):
+            legacy = fit_native_pcr(matrix, target, years[-80:], pca, config)
+        np.testing.assert_allclose(
+            fast.predict(matrix), legacy.predict(matrix),
+            atol=1e-12, rtol=1e-12, equal_nan=True,
+        )
+
     def test_fixed_prestandardization_uses_only_available_training_years(self):
         years = np.arange(1900, 1911)
         matrix = pd.DataFrame(
@@ -712,6 +769,32 @@ class ModelTests(unittest.TestCase):
         )
         self.assertEqual(int(matrix["native"].notna().sum()), 1)
         self.assertEqual(matrix.loc[1903, "native"], 7.0)
+
+    def test_window_grouping_matches_observed_means_with_gaps_and_partial_end(self):
+        years = np.arange(1900, 1934)
+        rng = np.random.default_rng(70)
+        annual = pd.DataFrame({"tree": rng.normal(size=len(years))}, index=years)
+        annual.loc[1905:1907, "tree"] = np.nan
+        times = np.array([1900.0, 1904.5, 1910.0, 1915.2, 1920.0, 1924.5, 1933.0])
+        native = ProxyRecord("native", times, np.arange(len(times), dtype=float), archive="Speleothem")
+        records = {"tree": ProxyRecord("tree", years, annual["tree"].to_numpy()), "native": native}
+        target = pd.Series(rng.normal(size=len(years)), index=years)
+        target.loc[1915:1918] = np.nan
+        matrix, window_target, windows = build_resolution_matrix(
+            annual, records, ["native"], target, 1900, 1933, 5,
+        )
+        for row in windows.itertuples():
+            expected = annual.loc[row.window_start:row.window_end, "tree"].mean()
+            np.testing.assert_allclose(matrix.loc[row.Index, "tree"], expected, equal_nan=True)
+            np.testing.assert_allclose(
+                window_target.loc[row.Index], target.loc[row.window_start:row.window_end].mean(),
+                equal_nan=True,
+            )
+            native_in_window = (
+                (times >= row.window_start - 0.5) & (times < row.window_end + 0.5)
+            )
+            expected_native = native.value[native_in_window].mean() if native_in_window.any() else np.nan
+            np.testing.assert_allclose(matrix.loc[row.Index, "native"], expected_native, equal_nan=True)
 
     def test_resolution_layer_requires_native_proxy_in_fitted_pca(self):
         years = np.arange(1900, 1990)
