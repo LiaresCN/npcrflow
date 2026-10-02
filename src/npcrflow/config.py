@@ -402,6 +402,8 @@ class ReconstructionConfig:
     rescreen_outer_folds: bool = True
     min_ce: float | None = 0.0
     min_re: float | None = 0.0
+    # Preserve the frozen inclusive gate unless strict positivity is requested.
+    internal_ce_re_comparison: Literal["ge", "gt"] = "ge"
     skill_floor: float = 0.0
     # Retained for reading v0.4.1 configurations.  It no longer classifies
     # outer validation or the final reconstruction.
@@ -413,6 +415,8 @@ class ReconstructionConfig:
     nest: ExplicitNestConfig = field(default_factory=ExplicitNestConfig)
 
     def __post_init__(self) -> None:
+        if self.internal_ce_re_comparison not in {"ge", "gt"}:
+            raise ValueError("internal_ce_re_comparison must be 'ge' or 'gt'")
         if self.interpolation not in {"none", "archive_linear"}:
             raise ValueError("interpolation must be 'none' or 'archive_linear'")
         archive_names = [str(name).strip().casefold() for name in self.interpolation_archives]

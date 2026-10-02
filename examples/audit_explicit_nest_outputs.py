@@ -33,7 +33,11 @@ def audit(directory: Path) -> dict:
             threshold = config[f"min_{metric}"]
             if threshold is None:
                 threshold = config["skill_floor"]
-            assert accepted[f"internal_median_{metric}"].ge(threshold).all()
+            values = accepted[f"internal_median_{metric}"]
+            if config.get("internal_ce_re_comparison", "ge") == "gt":
+                assert values.gt(threshold).all()
+            else:
+                assert values.ge(threshold).all()
     screening = pd.read_csv(directory / "proxy_screening.csv")
     selected = screening.loc[screening.selected.eq(True)].set_index("pid")
     assert len(selected) == manifest["selected_proxy_count"]

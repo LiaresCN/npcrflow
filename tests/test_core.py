@@ -27,7 +27,7 @@ from npcrflow.data import annualize_record, load_observations, load_proxy_databa
 from npcrflow.deduplicate import deduplicate_frame
 from npcrflow.model import (
     NativePCRModel, _component_candidates, _fit_candidate,
-    _pairwise_correlation, _score_rows, fit_native_pcr,
+    _pairwise_correlation, _passes_internal_ce_re, _score_rows, fit_native_pcr,
 )
 from npcrflow.pipeline import filter_records_with_report, run_pipeline
 from npcrflow.nesting import build_coverage_nests, explicit_nest_validation
@@ -359,6 +359,58 @@ class ScreeningTests(unittest.TestCase):
 
 
 class ModelTests(unittest.TestCase):
+    def test_strict_internal_ce_re_rejects_threshold_equality(self):
+        for threshold in (0.0, 0.05, 0.1):
+            above = np.nextafter(threshold, np.inf)
+            with self.subTest(threshold=threshold):
+                self.assertTrue(_passes_internal_ce_re(
+                    threshold, threshold, threshold, threshold, "ge"))
+                self.assertFalse(_passes_internal_ce_re(
+                    threshold, above, threshold, threshold, "gt"))
+                self.assertFalse(_passes_internal_ce_re(
+                    above, threshold, threshold, threshold, "gt"))
+                self.assertTrue(_passes_internal_ce_re(
+                    above, above, threshold, threshold, "gt"))
+                self.assertFalse(_passes_internal_ce_re(
+                    np.nan, above, threshold, threshold, "gt"))
+
+    def test_internal_ce_re_comparison_preserves_default_and_validates(self):
+        self.assertEqual(ReconstructionConfig().internal_ce_re_comparison, "ge")
+        with self.assertRaises(ValueError):
+            ReconstructionConfig(internal_ce_re_comparison="invalid")
+
+    def test_ols_kaiser_keeps_internal_validation_without_alpha_search(self):
+        rng = np.random.default_rng(312)
+        years = np.arange(1900, 2001)
+        signal = rng.normal(size=len(years))
+        matrix = pd.DataFrame({
+            "a": signal + 0.05 * rng.normal(size=len(years)),
+            "b": signal + 0.10 * rng.normal(size=len(years)),
+            "c": signal + 0.15 * rng.normal(size=len(years)),
+        }, index=years)
+        target = pd.Series(signal + 0.05 * rng.normal(size=len(years)), index=years)
+        model = fit_native_pcr(
+            matrix, target, years,
+            PCAConfig(selection="kaiser", max_components=8),
+            ReconstructionConfig(
+                regression="ols", regression_candidates=("ols",),
+                ridge_alphas=(0.0, 1.0, 10.0), auto_tune=True,
+                validation_block_years=34, min_ce=0.1, min_re=0.1,
+                internal_ce_re_comparison="gt",
+                amplitude=AmplitudeCalibrationConfig(
+                    method="auto", auto_candidates=(
+                        "variance_observation", "variance_max_proxy_nest")),
+            ),
+        )
+        table = model.selection_table
+        self.assertEqual(set(table.regression), {"ols"})
+        self.assertEqual(set(table.alpha), {0.0})
+        self.assertEqual(int(table.selection_stage.eq("structure").sum()), 1)
+        self.assertEqual(int(table.selection_stage.eq("amplitude").sum()), 2)
+        self.assertTrue(table.folds.eq(3).all())
+        self.assertTrue(table.internal_ce_re_comparison.eq("gt").all())
+        self.assertTrue(table.loc[table.selected, "passes_internal_ce_re"].all())
+
     def test_contiguous_folds_include_single_year_remainder(self):
         years = np.arange(1900, 2001)
         folds = contiguous_folds(years, 20)

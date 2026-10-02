@@ -222,6 +222,18 @@ def _fit_complete_basis(
     )
 
 
+def _passes_internal_ce_re(
+    ce: float, re: float, ce_threshold: float, re_threshold: float,
+    comparison: str = "ge",
+) -> bool:
+    """Apply the declared inclusive or strict internal median-skill gate."""
+    if comparison == "gt":
+        return bool(ce > ce_threshold and re > re_threshold)
+    if comparison == "ge":
+        return bool(ce >= ce_threshold and re >= re_threshold)
+    raise ValueError("internal_ce_re_comparison must be 'ge' or 'gt'")
+
+
 def _component_candidates(eigenvalues: np.ndarray, config: PCAConfig) -> list[int]:
     maximum = min(config.max_components, len(eigenvalues))
     if config.selection == "fixed":
@@ -632,8 +644,9 @@ def fit_native_pcr(
             if reconstruction_config.min_re is None
             else reconstruction_config.min_re
         )
-        passes_internal_ce_re = bool(
-            median_ce >= ce_threshold and median_re >= re_threshold
+        passes_internal_ce_re = _passes_internal_ce_re(
+            median_ce, median_re, ce_threshold, re_threshold,
+            reconstruction_config.internal_ce_re_comparison,
         )
         median_sd_ratio = float(metrics["sd_ratio"].median())
         sd_ratio_error = abs(np.log(max(median_sd_ratio, 1e-12)))
@@ -671,6 +684,7 @@ def fit_native_pcr(
             "minimum_skill": minimum_skill,
             "internal_ce_threshold": ce_threshold,
             "internal_re_threshold": re_threshold,
+            "internal_ce_re_comparison": reconstruction_config.internal_ce_re_comparison,
             "passes_internal_ce_re": passes_internal_ce_re,
             # Backward-compatible column name retained for v0.4.1 readers.
             "passes_skill_floor": passes_internal_ce_re,

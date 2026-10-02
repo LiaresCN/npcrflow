@@ -75,6 +75,10 @@ The same fields are available through the typed Python configuration classes.
   thresholds when its median inner-fold CE and RE meet `min_ce` and `min_re`;
   the complete selection table reports candidates that did not pass. Each
   explicit NEST applies this decision independently.
+- `internal_ce_re_comparison="ge"` preserves the frozen inclusive CE/RE
+  thresholds. Set `"gt"` to require both internal medians strictly greater
+  than their respective thresholds; zero is then rejected at a zero threshold.
+  This comparison never changes external sensitivities into acceptance gates.
 - `n_bootstrap`, `bootstrap_block_years`, and
   `minimum_bootstrap_success_fraction` control moving-block uncertainty. A run
   fails loudly if too few members fit instead of silently reporting a
