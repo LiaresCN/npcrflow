@@ -2,9 +2,11 @@
 
 `npcrflow` turns the former multi-notebook NPCR workflow into one importable,
 auditable pipeline.  It reads the raw 21-column Dod2k pickle directly, screens
-proxies with effective degrees of freedom, reconstructs without mandatory
-interpolation, validates on contiguous time blocks, and writes only compact
-results.  It never writes per-nest workbooks or bootstrap members by default.
+proxies with effective degrees of freedom, constructs the original
+coverage-defined NESTs in memory, fits each NEST independently, reconstructs
+without mandatory proxy interpolation, validates on contiguous time blocks,
+and writes only compact results. It never writes per-NEST workbooks, matrices,
+or bootstrap members.
 
 The original WNPSM, PDO, and Dod2k files are read-only inputs.  All derived
 files live under this project.
@@ -12,14 +14,14 @@ files live under this project.
 ## Installation
 
 ```bash
-python -m pip install git+https://github.com/LiaresCN/npcrflow.git@v0.5.0
+python -m pip install git+https://github.com/LiaresCN/npcrflow.git@v0.6.0
 ```
 
 For an offline MEL installation, use the release wheel without modifying the
 source environment:
 
 ```bash
-python -m pip install /path/to/npcrflow-0.5.0-py3-none-any.whl
+python -m pip install /path/to/npcrflow-0.6.0-py3-none-any.whl
 ```
 
 ## Minimal use
@@ -27,7 +29,7 @@ python -m pip install /path/to/npcrflow-0.5.0-py3-none-any.whl
 ```python
 from pathlib import Path
 from npcrflow import (
-    AmplitudeCalibrationConfig, MultiresolutionConfig,
+    AmplitudeCalibrationConfig, ExplicitNestConfig, MultiresolutionConfig,
     OutputConfig, PCAConfig, PipelineConfig, ProxyFilterConfig,
     ProxyWeightConfig, ReconstructionConfig, ScreeningConfig,
     TargetConfig, run_pipeline,
@@ -48,15 +50,27 @@ cfg = PipelineConfig(
     ),
     pca=PCAConfig(method="pairwise", selection="blocked_cv"),
     reconstruction=ReconstructionConfig(
+        method="explicit_nest",
         calibration_period=(1940, 2010),
         interpolation="archive_linear",
         interpolation_archives=("Wood", "Coral"),
         interpolation_max_gap_years=2,
         interpolation_max_resolution_years=2.0,
         retain_longest_annual_segment=True,
+        detrend_proxies=False,
+        standardization_period=None,  # or, e.g., (1950, 2000)
         regression="auto",
         regression_candidates=("ridge", "pls", "elasticnet"),
         n_bootstrap=200,
+        nest=ExplicitNestConfig(
+            minimum_span_years=50,
+            combination="median",
+            require_internal_ce_re=True,
+            direct_annual_resolution_years=1.5,
+            multiresolution_subnests=True,
+            subnest_resolution_bins=(2, 3, 5, 10),
+            subnest_max_resolution_years=10.0,
+        ),
         amplitude=AmplitudeCalibrationConfig(
             method="auto",              # includes dynamic variance
             variance_reference="observation",  # observation | max_proxy_nest
@@ -120,6 +134,15 @@ Observation filtering is explicit and off by default. Use
 `TargetConfig(lowpass_years=None)` for the original observed index (the primary
 PDO workflow), or set a period such as `lowpass_years=10` only for a labelled
 low-frequency sensitivity experiment. The manifest records this choice.
+Proxy screening detrending (`ScreeningConfig.detrend`) and reconstruction-stage
+proxy detrending (`ReconstructionConfig.detrend_proxies`) are separate switches
+and are both off in the PDO baseline. Proxy values are never silently filtered.
+Each NEST always standardizes its columns again from its own training years for
+PCA. Set `standardization_period=(1950, 2000)`, as in the WNPSM example, to add
+the former common-reference proxy z-score once in memory *before* NEST
+construction. In an outer validation run, this first reference uses only the
+intersection with that run's calibration years; no intermediate proxy or NEST
+workbook is written.
 
 ## Command line
 
@@ -139,6 +162,18 @@ Create the audited Dod2k copy with:
 ```
 
 ## What changed from the notebooks
+
+- The original NPCR structure is retained explicitly: proxy coverage defines
+  unique NESTs, each NEST has its own PCA/PCR and internal CE/RE assessment,
+  and accepted NEST reconstructions are combined. The optimization removes
+  only the Excel hand-off and saved NEST matrices; `nest_summary.csv` keeps a
+  compact audit.
+- Mixed resolution is handled inside each coverage NEST. A three-year
+  stalagmite joins a three-year resolution sub-NEST together with three-year
+  window means of the annual proxies and target, and therefore participates in
+  PCA, calibration, and regression. Its accepted window prediction constrains
+  the annual state while the annual layer supplies within-window variability.
+  No stalagmite observations are interpolated into artificial annual values.
 
 - Proxy screening always uses observed values. During reconstruction,
   `archive_linear` may fill only complete, bounded short gaps in explicitly
@@ -192,11 +227,13 @@ Create the audited Dod2k copy with:
   years. The map is fitted again inside every inner and outer
   fold. Raw predictions, calibrated predictions, slope, and intercept remain
   auditable, so amplitude cannot be changed after looking at withheld scores.
-- Native records at or below the configured regression-resolution limit can
-  participate directly in pairwise PCR at their observed years. Only eligible
-  Wood/Coral short gaps may be filled under the declared interpolation policy;
-  other unobserved years remain `NaN`. Slower proxies can be reserved for native-window low-frequency
-  assimilation. The latent result remains annual, but a decadal observation
+- In the unified-matrix sensitivity, native records can still participate in
+  pairwise missing-data PCR. In the primary explicit-NEST method, records up
+  to ten-year resolution instead participate in their corresponding
+  resolution sub-NEST. Only eligible Wood/Coral short gaps may be filled under
+  the declared interpolation policy; other unobserved years remain `NaN`.
+  Records too sparse for a resolution sub-NEST can use native-window
+  low-frequency assimilation. The latent result remains annual, but a decadal observation
   constrains only the mean low-pass state over its native support interval. It
   does not become ten annual observations. The PCR core is explicitly split
   into low- and high-frequency components; only a smooth, bounded increment to
@@ -270,16 +307,24 @@ interior gaps up to a declared length (two years by default); no endpoint is
 extrapolated, and all other archives remain native. Every filled proxy-year is
 reported separately and `interpolation="none"` remains available.
 
+Version 0.6.0 restores explicit coverage-defined NESTs as the primary method
+without restoring Excel intermediates. Every NEST is independently fitted and
+screened by internal CE/RE. Resolution sub-NESTs let 2–10-year records
+participate in window-scale PCA/PCR with annual proxies aggregated to matching
+windows; their predictions are fused into the annual state without proxy
+interpolation.
+
 ## Compact outputs
 
 Depending on the enabled options, a run writes `source_qc.csv`, `proxy_screening.csv`,
 `reconstruction.csv`, `observation_fit.csv`, `primary_reconstruction_summary.csv`,
 `validation_folds.csv`, `validation_summary.csv`,
-`model_selection.csv`, `proxy_availability.csv`,
+`model_selection.csv`, `nest_summary.csv`, `proxy_availability.csv`,
 `proxy_interpolation_audit.csv`, sensitivity summaries, one
 proxy map, one observation diagnostic figure, and `manifest.json`. The manifest contains input hashes and the full
-configuration.  `save_nests` defaults to false and no implementation path saves
-nest ensembles.
+configuration. `save_nests` remains a compatibility field and no
+implementation path writes NEST matrices, Excel workbooks, or member
+ensembles.
 
 `primary_reconstruction_summary.csv` puts the declared main-result evidence in
 one row: the full reconstruction's correlation with observations and the
@@ -305,19 +350,22 @@ cannot resolve adequately.
 filter reasons.  Records with implausible end years are excluded and reported,
 never silently edited in the source database.
 
-`proxy_availability.csv` distinguishes `annual_core`, `low_frequency_only`,
-and `unconstrained` years and reports native, interpolated, annual-core, and
-low-resolution support counts. `proxy_interpolation_audit.csv` records archive,
+In explicit-NEST mode, `proxy_availability.csv` reports the number of
+contributing NESTs and the largest annual, resolution-sub-NEST, and optional
+low-resolution proxy counts available each year. The `native_missing`
+sensitivity retains the `annual_core`, `low_frequency_only`, and
+`unconstrained` labels. `proxy_interpolation_audit.csv` records archive,
 native resolution, eligibility, and number of filled years for each proxy.
 When amplitude calibration is enabled,
 `reconstruction.csv` retains `point_raw` and `median_raw` beside the calibrated
 series. A multiresolution run additionally retains the core low/high-frequency
 components, adjusted low-frequency component, and applied increment.
-`low_frequency_observations.csv` is an audit table rather than a NEST: every
-native proxy sample lists its original time, inferred support interval, annual
-state years constrained, mapped low-pass value, innovation, and weight. Thus a
-three-year stalagmite series remains a sequence of three-year window
-constraints and is never expanded into three synthetic annual observations.
+`nest_summary.csv` reports each resolution sub-NEST's native observed-window
+count and accepted prediction-window count. Detailed window matrices and
+predictions remain in memory because writing them once for every overlapping
+coverage NEST would recreate the large intermediate-file problem. A
+three-year stalagmite remains a sequence of native three-year observations and
+is never expanded into three synthetic annual observations.
 
 Each enabled network sensitivity writes both its repeat-level table and a
 compact `*_summary.csv` containing the minimum, 5/25/50/75/95th percentiles,
@@ -338,6 +386,10 @@ Run the local unit suite on a compute node:
 PYTHONPATH=src /share/home/lrs/.conda/envs/mybase/bin/python \
   -m unittest discover -s tests -v
 ```
+
+Version 0.6.0 currently passes 48 tests, including an end-to-end mixed-
+resolution case in which a native three-year speleothem and annual tree-ring
+means jointly enter a three-year PCA/PCR layer, plus moving-block bootstrap.
 
 The primary PDO regression driver is `examples/run_pdo_from_raw_dod2k.py`; the
 associated Slurm launcher is `scripts/run_pdo_raw_dod2k.slurm`. The older

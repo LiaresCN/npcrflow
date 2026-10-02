@@ -2,6 +2,7 @@
 
 from .config import (
     AmplitudeCalibrationConfig,
+    ExplicitNestConfig,
     ProxyWeightConfig,
     MultiresolutionConfig,
     OutputConfig,
@@ -21,6 +22,7 @@ from .screening import correlation_with_effective_dof, screen_proxies
 
 __all__ = [
     "AmplitudeCalibrationConfig",
+    "ExplicitNestConfig",
     "ProxyWeightConfig",
     "MultiresolutionConfig",
     "OutputConfig",
@@ -44,4 +46,4 @@ __all__ = [
     "screen_proxies",
 ]
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"

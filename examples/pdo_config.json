@@ -53,6 +53,7 @@
     "score_ridge": 0.1
   },
   "reconstruction": {
+    "method": "explicit_nest",
     "calibration_period": [1900, 2000],
     "reconstruction_period": [0, null],
     "interpolation": "archive_linear",
@@ -61,6 +62,7 @@
     "interpolation_max_resolution_years": 2.0,
     "retain_longest_annual_segment": true,
     "detrend_proxies": false,
+    "standardization_period": null,
     "regression": "ridge",
     "regression_candidates": ["ridge", "pls", "elasticnet"],
     "ridge_alphas": [0.0, 0.01, 0.1, 1.0, 10.0, 100.0],
@@ -71,6 +73,7 @@
     "evaluation_lowpass_periods": [10.0, 20.0],
     "evaluation_period_bands": [[10.0, 30.0]],
     "validation_block_years": 34,
+    "minimum_internal_train_samples": 20,
     "n_bootstrap": 50,
     "bootstrap_block_years": 5,
     "minimum_bootstrap_success_fraction": 0.8,
@@ -82,6 +85,22 @@
     "min_re": 0.0,
     "skill_floor": 0.0,
     "auto_tune": true,
+    "nest": {
+      "minimum_span_years": 50,
+      "minimum_start_year": 100,
+      "minimum_total_proxies": 2,
+      "minimum_core_proxies": 2,
+      "minimum_calibration_years": 20,
+      "combination": "median",
+      "require_internal_ce_re": true,
+      "multiresolution_subnests": true,
+      "direct_annual_resolution_years": 1.5,
+      "subnest_max_resolution_years": 10.0,
+      "subnest_resolution_bins": [2, 3, 5, 10],
+      "minimum_subnest_calibration_windows": 8,
+      "subnest_constraint_weight": 1.0,
+      "subnest_smoothness_multiplier": 1.0
+    },
     "amplitude": {
       "method": "auto",
       "variance_reference": "observation",
@@ -107,6 +126,7 @@
     "multiresolution": {
       "enabled": false,
       "state_timestep_years": 1,
+      "direct_pcr_max_resolution_years": 1.5,
       "regression_max_resolution_years": 10.0,
       "lowpass_period_years": 10.0,
       "smoothness_multiplier": 1.0,

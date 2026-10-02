@@ -23,7 +23,31 @@ cap-exclusion columns when such a temporary engineering limit is requested.
 An optional separate minimum-overlap threshold admits genuinely low-resolution
 records to the low-frequency layer without relaxing the annual-network rule.
 
-## Native-resolution PCR
+## Explicit in-memory coverage NESTs
+
+The primary method retains the original WNPSM/PDO NPCR structure. Candidate
+boundaries are taken from selected-proxy coverage envelopes. For each distinct
+predictor set, only its longest covered interval is retained. Every retained
+coverage NEST is then standardized, decomposed, calibrated, and tested
+independently. A NEST is admitted to the combined reconstruction only when its
+selected internal model meets the configured median CE and RE thresholds.
+
+The former WNPSM preprocessing first z-scored every proxy against 1950–2000,
+then built NESTs, whose PCA standardized the predictors a second time. The
+common-period step is retained as an optional in-memory transform through
+`standardization_period`; the WNPSM example enables it, while the unfiltered
+PDO benchmark leaves it off. NEST PCA always retains its separate training-only
+standardization. In an external early/late holdout, the common reference is
+intersected with that fit's calibration years. Native-resolution proxy values
+use only their actual observations in the reference period.
+
+All matrices remain in memory. The software saves one compact
+`nest_summary.csv`, the selected per-NEST model rows, and support audits; it
+never writes the former NEST Excel workbooks. `method="native_missing"` keeps
+the previous unified-matrix implementation as a declared sensitivity, while
+`method="explicit_nest"` is the primary default.
+
+## Annual-resolution PCR inside each NEST
 
 The annual matrix contains observed annual/seasonal bins and `NaN` elsewhere.
 The default reconstruction policy may linearly fill only complete, bounded
@@ -107,7 +131,31 @@ robust CE/RE, then correlation, then standard-deviation fidelity. The selected
 option is locked before the outer holdout is predicted. This prevents a better
 amplitude ratio from purchasing a worse PCR structure.
 
-## Low-frequency constraint
+## Resolution sub-NESTs and low-frequency constraint
+
+A coverage NEST is not required to have one sampling interval. Within each
+coverage NEST, records no coarser than the declared annual threshold form the
+annual PCA/PCR layer. Records between that threshold and 10 years are assigned
+to 2-, 3-, 5-, or 10-year resolution sub-NESTs. For each such layer, annual
+proxies and the observed target are averaged over exactly the same calendar
+windows as the native-resolution layer. The native proxy samples are averaged
+only when more than one genuinely observed sample falls in a window; missing
+windows remain missing. The resulting window matrix undergoes its own PCA,
+calibration regression, and internal CE/RE test.
+
+For example, ten annual tree-ring records and one three-year stalagmite in a
+shared coverage NEST produce an annual tree-ring PCR and a three-year PCR whose
+predictors are the ten three-year tree-ring means plus the native stalagmite
+values. Thus the stalagmite participates in PCA and regression, but it is never
+expanded into three synthetic annual values. Accepted three-year predictions
+constrain the corresponding three-year means of the annual state through a
+smooth observation operator. The annual layer retains the within-window
+year-to-year structure. The final output therefore remains annual while its
+coarser information content stays explicit.
+
+Records coarser than the maximum resolution-sub-NEST limit can optionally use
+the separate native-window low-frequency operator described below. This layer
+is useful when too few calibration windows exist for a defensible PCA/PCR.
 
 The latent state has an explicit one-year time step, so the default final
 reconstruction is annual even when proxy resolutions differ. For a

@@ -295,6 +295,7 @@ def _fit_candidate(
     basis: tuple | None = None,
     amplitude_config: AmplitudeCalibrationConfig | None = None,
 ) -> NativePCRModel:
+    train_years = list(train_years)
     basis_function = _fit_pairwise_basis if pca_config.method == "pairwise" else _fit_complete_basis
     if basis is None:
         basis = basis_function(
@@ -306,8 +307,11 @@ def _fit_candidate(
         trend_intercepts, trend_slopes, trend_origin, proxy_weights, weight_table,
     ) = basis
     n_components = min(n_components, loadings.shape[1])
+    # Fitting only needs training scores. Repeatedly solving PC scores for
+    # millennia outside calibration in every candidate/fold inflated runtime
+    # without affecting any fitted coefficient or validation prediction.
     scores = _score_rows(
-        matrix,
+        matrix.loc[matrix.index.isin(train_years)],
         columns,
         means,
         scales,
@@ -360,7 +364,11 @@ def _fit_candidate(
         amplitude_calibrator=AmplitudeCalibrator(),
         selection_table=pd.DataFrame(),
     )
-    raw_training_prediction = model.predict_raw(matrix.reindex(joined.index))
+    raw_training_prediction = pd.Series(
+        np.asarray(regressor.predict(joined.iloc[:, :n_components])).reshape(-1),
+        index=joined.index,
+        name="reconstruction",
+    )
     training_availability = (
         matrix.reindex(joined.index)
         .reindex(columns=columns)
@@ -488,7 +496,10 @@ def fit_native_pcr(
     folds = contiguous_folds(
         target_years,
         reconstruction_config.validation_block_years,
-        minimum_train_years=max(20, pca_config.max_components + 3),
+        minimum_train_years=max(
+            reconstruction_config.minimum_internal_train_samples,
+            pca_config.max_components + 3,
+        ),
     )
     # PCA/covariance depends on the fold's training data but not on PC count or
     # regression alpha. Cache it once per fold instead of recomputing it for

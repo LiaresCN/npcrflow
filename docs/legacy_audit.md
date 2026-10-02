@@ -57,3 +57,12 @@ retains strict native missingness. The path otherwise uses
 calibration-contained preprocessing, nested contiguous validation, standard
 RE/CE, deterministic seeds, in-memory results, automatic end years,
 regularized linear alternatives, and compact sensitivity tables.
+
+Version 0.6 preserves the scientific NEST sequence while removing only the
+file round-trip: unique predictor sets are still defined from coverage,
+PCA/PCR and internal CE/RE are still fitted independently in every NEST, and
+accepted NEST reconstructions are still combined. Matrices remain in memory
+and only `nest_summary.csv` is saved. Mixed-resolution records use additional
+2/3/5/10-year PCA/PCR layers inside the same coverage NEST, with annual proxies
+and observations aggregated to matching windows; no speleothem, ice, or
+sediment value is interpolated into synthetic annual observations.

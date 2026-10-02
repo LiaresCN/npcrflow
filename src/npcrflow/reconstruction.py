@@ -41,6 +41,7 @@ class ReconstructionResult:
     low_frequency_constraints: pd.DataFrame
     low_frequency_observations: pd.DataFrame
     multiresolution_selection: pd.DataFrame
+    nest_summary: pd.DataFrame
 
 
 def _months_from_screening(screening: pd.DataFrame) -> dict[str, tuple[int, ...]]:
@@ -90,6 +91,8 @@ def build_proxy_matrix(
     interpolation_archives: Sequence[str] = ("Wood", "Coral"),
     interpolation_max_gap_years: int = 2,
     interpolation_max_resolution_years: float = 2.0,
+    standardization_period: tuple[int, int] | None = None,
+    standardization_years: Sequence[int] | None = None,
 ) -> pd.DataFrame:
     month_lookup = _months_from_screening(screening if screening is not None else pd.DataFrame())
     series: dict[str, pd.Series] = {}
@@ -162,7 +165,66 @@ def build_proxy_matrix(
     matrix.attrs["native_observed_mask"] = native_observed
     matrix.attrs["interpolated_mask"] = interpolated_mask
     matrix.attrs["interpolation_audit"] = pd.DataFrame(audit_rows)
+    if standardization_period is not None:
+        matrix = prestandardize_proxy_matrix(
+            matrix,
+            standardization_period,
+            allowed_years=standardization_years,
+        )
     return matrix
+
+
+def prestandardize_proxy_matrix(
+    matrix: pd.DataFrame,
+    period: tuple[int, int],
+    *,
+    allowed_years: Sequence[int] | None = None,
+) -> pd.DataFrame:
+    """Apply the legacy common-period proxy z-score once before NEST fitting.
+
+    PCA still performs its own training-only standardization inside every NEST.
+    This first transformation retains the former WNPSM preprocessing sequence
+    without writing an intermediate proxy or NEST workbook.  ``allowed_years``
+    limits an outer validation run to its calibration years.
+    """
+
+    start, end = period
+    reference_mask = (matrix.index >= start) & (matrix.index <= end)
+    if allowed_years is not None:
+        reference_mask &= matrix.index.isin(np.asarray(list(allowed_years), dtype=int))
+    result = matrix.copy()
+    result.attrs = matrix.attrs.copy()
+    rows: list[dict[str, object]] = []
+    for pid in result.columns:
+        reference = matrix.loc[reference_mask, pid].dropna()
+        mean = float(reference.mean())
+        scale = float(reference.std(ddof=1))
+        if len(reference) < 2 or not np.isfinite(scale) or scale <= 0:
+            raise RuntimeError(
+                f"proxy {pid} cannot be standardized over {period} within the training years"
+            )
+        result[pid] = (matrix[pid] - mean) / scale
+        rows.append(
+            {
+                "pid": pid,
+                "standardization_start": start,
+                "standardization_end": end,
+                "standardization_reference_count": int(len(reference)),
+                "standardization_mean": mean,
+                "standardization_sd": scale,
+            }
+        )
+    standardization_audit = pd.DataFrame(rows)
+    result.attrs["standardization_audit"] = standardization_audit
+    interpolation_audit = result.attrs.get("interpolation_audit", pd.DataFrame())
+    if isinstance(interpolation_audit, pd.DataFrame) and not interpolation_audit.empty:
+        result.attrs["interpolation_audit"] = interpolation_audit.merge(
+            standardization_audit,
+            on="pid",
+            how="left",
+            validate="one_to_one",
+        )
+    return result
 
 
 def split_resolution_roles(
@@ -180,9 +242,15 @@ def split_resolution_roles(
     """
 
     selected = list(pids)
-    if not reconstruction_config.multiresolution.enabled:
+    if (
+        reconstruction_config.method == "explicit_nest"
+        and reconstruction_config.nest.multiresolution_subnests
+    ):
+        maximum = reconstruction_config.nest.direct_annual_resolution_years
+    elif not reconstruction_config.multiresolution.enabled:
         return selected, []
-    maximum = reconstruction_config.multiresolution.regression_max_resolution_years
+    else:
+        maximum = reconstruction_config.multiresolution.direct_pcr_max_resolution_years
     low_resolution = [
         pid
         for pid in selected
@@ -590,6 +658,8 @@ def blocked_pipeline_validation(
                 reconstruction_config.interpolation_archives,
                 reconstruction_config.interpolation_max_gap_years,
                 reconstruction_config.interpolation_max_resolution_years,
+                reconstruction_config.standardization_period,
+                train,
             )
             model = fit_native_pcr(matrix, target, train, pca_config, reconstruction_config)
             core_prediction = model.predict(matrix)
@@ -822,7 +892,7 @@ def summarize_external_sensitivities(
     return pd.DataFrame(summaries)
 
 
-def reconstruct(
+def reconstruct_native_missing(
     records: ProxyCollection | Mapping[str, ProxyRecord],
     screening: pd.DataFrame,
     target: pd.Series,
@@ -852,6 +922,7 @@ def reconstruct(
                 automatic_period[0] if effective_period[0] is None else effective_period[0],
                 automatic_period[1] if effective_period[1] is None else effective_period[1],
             )
+    calibration_years = _calibration_years(target, reconstruction_config)
     matrix = build_proxy_matrix(
         records,
         core_selected,
@@ -862,8 +933,9 @@ def reconstruct(
         reconstruction_config.interpolation_archives,
         reconstruction_config.interpolation_max_gap_years,
         reconstruction_config.interpolation_max_resolution_years,
+        reconstruction_config.standardization_period,
+        calibration_years,
     )
-    calibration_years = _calibration_years(target, reconstruction_config)
     calibration_years = calibration_years[np.isin(calibration_years, matrix.index)]
     model = fit_native_pcr(matrix, target, calibration_years, pca_config, reconstruction_config)
     point = model.predict(matrix)
@@ -918,6 +990,7 @@ def reconstruct(
     ensemble: list[np.ndarray] = []
     raw_ensemble: list[np.ndarray] = []
     bootstrap_errors: list[str] = []
+    bootstrap_fit_config = replace(reconstruction_config, auto_tune=False)
     for _ in range(reconstruction_config.n_bootstrap):
         sampled = _moving_block_sample(
             calibration_years,
@@ -930,7 +1003,7 @@ def reconstruct(
                 target,
                 sampled,
                 pca_config,
-                reconstruction_config,
+                bootstrap_fit_config,
                 forced_n_components=model.n_components,
                 forced_alpha=model.alpha,
                 forced_regression=model.regression_name,
@@ -1073,4 +1146,28 @@ def reconstruct(
         low_frequency_constraints=low_frequency_constraints,
         low_frequency_observations=low_frequency_observations,
         multiresolution_selection=multiresolution_selection,
+        nest_summary=pd.DataFrame(),
+    )
+
+
+def reconstruct(
+    records: ProxyCollection | Mapping[str, ProxyRecord],
+    screening: pd.DataFrame,
+    target: pd.Series,
+    screening_config: ScreeningConfig,
+    pca_config: PCAConfig,
+    reconstruction_config: ReconstructionConfig,
+) -> ReconstructionResult:
+    """Dispatch to explicit NEST NPCR or the unified native-missing sensitivity."""
+
+    if reconstruction_config.method == "native_missing":
+        return reconstruct_native_missing(
+            records, screening, target, screening_config,
+            pca_config, reconstruction_config,
+        )
+    from .nesting import reconstruct_explicit_nests
+
+    return reconstruct_explicit_nests(
+        records, screening, target, screening_config,
+        pca_config, reconstruction_config,
     )

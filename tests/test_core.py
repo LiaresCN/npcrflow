@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 import numpy as np
@@ -9,6 +10,7 @@ import pandas as pd
 
 from npcrflow.config import (
     AmplitudeCalibrationConfig,
+    ExplicitNestConfig,
     MultiresolutionConfig,
     PCAConfig,
     OutputConfig,
@@ -23,17 +25,21 @@ from npcrflow.config import (
 from npcrflow.amplitude import fit_amplitude_calibrator
 from npcrflow.data import annualize_record, load_observations, load_proxy_database
 from npcrflow.deduplicate import deduplicate_frame
-from npcrflow.model import _component_candidates, fit_native_pcr
+from npcrflow.model import _component_candidates, _score_rows, fit_native_pcr
 from npcrflow.pipeline import filter_records_with_report, run_pipeline
+from npcrflow.nesting import explicit_nest_validation
 from npcrflow.records import ProxyCollection, ProxyRecord
 from npcrflow.low_frequency import _native_support_widths, variational_low_frequency_adjustment
 from npcrflow.reconstruction import blocked_pipeline_validation, blocked_validation
 from npcrflow.reconstruction import (
     _longest_contiguous_annual_period,
     build_proxy_matrix,
+    prestandardize_proxy_matrix,
+    reconstruct,
     split_resolution_roles,
     tune_multiresolution_config,
 )
+from npcrflow.resolution_nest import build_resolution_matrix, fit_resolution_subnests
 from npcrflow.screening import _fdr_bh, correlation_with_effective_dof, screen_proxies
 from npcrflow.sensitivity import run_network_sensitivities, summarize_sensitivity
 from npcrflow.validation import (
@@ -408,6 +414,63 @@ class ModelTests(unittest.TestCase):
         self.assertGreater(correlation, 0.8)
         self.assertEqual(int(matrix.isna().sum().sum()), missing_before)
 
+    def test_training_score_optimization_preserves_full_reconstruction(self):
+        rng = np.random.default_rng(123)
+        years = np.arange(1800, 2000)
+        latent = np.sin((years - 1800) / 8)
+        matrix = pd.DataFrame({
+            f"p{i}": latent + rng.normal(0, 0.15, len(years))
+            for i in range(3)
+        }, index=years)
+        matrix.loc[years[::4], "p1"] = np.nan
+        target = pd.Series(latent, index=years)
+        # Duplicate sampled years exercise the bootstrap alignment too.
+        train = np.repeat(years[-60:], 2)
+        pca = PCAConfig(selection="fixed", n_components=2, max_components=2)
+        config = ReconstructionConfig(
+            auto_tune=False, regression="ridge", ridge_alphas=(0.1,),
+            amplitude=AmplitudeCalibrationConfig(method="variance"), n_bootstrap=0,
+        )
+        optimized = fit_native_pcr(matrix, target, train, pca, config)
+
+        def legacy_scores(_matrix, *args):
+            return _score_rows(matrix, *args)
+
+        with patch("npcrflow.model._score_rows", side_effect=legacy_scores):
+            full_matrix_fit = fit_native_pcr(matrix, target, train, pca, config)
+        np.testing.assert_allclose(
+            optimized.predict(matrix), full_matrix_fit.predict(matrix),
+            atol=1e-12, rtol=1e-12, equal_nan=True,
+        )
+
+    def test_fixed_prestandardization_uses_only_available_training_years(self):
+        years = np.arange(1900, 1911)
+        matrix = pd.DataFrame(
+            {
+                "p1": np.arange(len(years), dtype=float),
+                "p2": 10.0 + 2.0 * np.arange(len(years), dtype=float),
+            },
+            index=years,
+        )
+        # The requested reference extends through 1910, but the final three
+        # years are held out. They must not influence the common-period z-score.
+        train_years = years[:8]
+        standardized = prestandardize_proxy_matrix(
+            matrix,
+            (1905, 1910),
+            allowed_years=train_years,
+        )
+        np.testing.assert_allclose(standardized.loc[1906], [0.0, 0.0])
+        audit = standardized.attrs["standardization_audit"].set_index("pid")
+        np.testing.assert_allclose(
+            audit.loc[["p1", "p2"], "standardization_mean"], [6.0, 22.0]
+        )
+        self.assertEqual(set(audit["standardization_reference_count"]), {3})
+
+    def test_standardization_period_must_increase(self):
+        with self.assertRaisesRegex(ValueError, "standardization period"):
+            ReconstructionConfig(standardization_period=(2000, 1950))
+
     def test_random_forest_regression_uses_same_native_score_path(self):
         rng = np.random.default_rng(5)
         years = np.arange(1900, 1970)
@@ -521,7 +584,7 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(unavailable["spectral_10_30y_n"], 30.0)
         self.assertTrue(np.isnan(unavailable["spectral_10_30y_amplitude_ratio"]))
 
-    def test_subdecadal_proxy_enters_regression_without_interpolation(self):
+    def test_subdecadal_proxy_is_routed_to_resolution_subnest_without_interpolation(self):
         years = np.arange(1900, 1931)
         records = {
             "annual": ProxyRecord("annual", years, np.sin(years)),
@@ -546,16 +609,228 @@ class ModelTests(unittest.TestCase):
             pca,
             reconstruction,
         )
-        self.assertEqual(core, ["annual", "three_year"])
-        self.assertEqual(low, ["eleven_year"])
+        self.assertEqual(core, ["annual"])
+        self.assertEqual(low, ["three_year", "eleven_year"])
         matrix = build_proxy_matrix(
             records,
-            core,
+            ["three_year"],
             ScreeningConfig(),
             interpolation="none",
         )
         self.assertEqual(int(matrix["three_year"].notna().sum()), len(years[::3]))
         self.assertTrue(np.isnan(matrix.loc[1901, "three_year"]))
+
+    def test_three_year_proxy_participates_in_window_pca_and_regression(self):
+        years = np.arange(1900, 2000)
+        latent = np.sin(np.arange(len(years)) / 7.0) + 0.3 * np.cos(
+            np.arange(len(years)) / 19.0
+        )
+        three_years = years[1::3]
+        records = {
+            "tree_a": ProxyRecord("tree_a", years, latent, archive="Wood"),
+            "tree_b": ProxyRecord(
+                "tree_b", years, 0.9 * latent + 0.05 * np.cos(years),
+                archive="Wood",
+            ),
+            "stalagmite": ProxyRecord(
+                "stalagmite",
+                three_years,
+                pd.Series(latent, index=years).reindex(three_years).to_numpy(),
+                archive="Speleothem",
+            ),
+        }
+        annual_matrix = pd.DataFrame(
+            {"tree_a": records["tree_a"].value, "tree_b": records["tree_b"].value},
+            index=pd.Index(years, name="Year"),
+        )
+        target = pd.Series(latent, index=years, name="target")
+        config = ReconstructionConfig(
+            auto_tune=False,
+            n_bootstrap=0,
+            full_network_outer_validation=False,
+            rescreen_outer_folds=False,
+            nest=ExplicitNestConfig(
+                minimum_subnest_calibration_windows=8
+            ),
+        )
+        models, audit = fit_resolution_subnests(
+            annual_matrix,
+            records,
+            ["stalagmite"],
+            target,
+            years,
+            int(years.min()),
+            int(years.max()),
+            PCAConfig(
+                selection="fixed", n_components=1, max_components=1,
+                min_proxies_per_year=2,
+            ),
+            config,
+        )
+        self.assertEqual(len(models), 1)
+        self.assertEqual(models[0].resolution_years, 3)
+        self.assertIn("stalagmite", models[0].model.columns)
+        self.assertIn("tree_a", models[0].model.columns)
+        self.assertTrue(bool(audit.iloc[0]["accepted"]))
+
+    def test_resolution_subnest_prestandardizes_native_values_without_interpolation(self):
+        years = np.arange(1900, 1910)
+        record = ProxyRecord(
+            "stalagmite",
+            [1900, 1903, 1906, 1909],
+            [10.0, 13.0, 16.0, 19.0],
+            archive="Speleothem",
+        )
+        matrix, _, _ = build_resolution_matrix(
+            pd.DataFrame({"tree": np.zeros(len(years))}, index=years),
+            {
+                "tree": ProxyRecord("tree", years, np.zeros(len(years)), archive="Wood"),
+                "stalagmite": record,
+            },
+            ["stalagmite"],
+            pd.Series(np.zeros(len(years)), index=years),
+            1900,
+            1909,
+            3,
+            standardization_period=(1900, 1906),
+            standardization_years=years,
+        )
+        # The three observed reference values have mean 13 and sample SD 3;
+        # no annual values are manufactured between the four native samples.
+        np.testing.assert_allclose(
+            matrix["stalagmite"].to_numpy(), [-1.0, 0.0, 1.0, 2.0]
+        )
+
+    def test_native_sample_on_window_boundary_is_used_once(self):
+        record = ProxyRecord("native", [1902.5], [7.0], archive="Speleothem")
+        matrix, _, _ = build_resolution_matrix(
+            pd.DataFrame(index=np.arange(1900, 1906)),
+            {"native": record},
+            ["native"],
+            pd.Series(0.0, index=np.arange(1900, 1906)),
+            1900, 1905, 3,
+        )
+        self.assertEqual(int(matrix["native"].notna().sum()), 1)
+        self.assertEqual(matrix.loc[1903, "native"], 7.0)
+
+    def test_resolution_layer_requires_native_proxy_in_fitted_pca(self):
+        years = np.arange(1900, 1990)
+        latent = np.sin((years - 1900) / 7.0)
+        records = {
+            "tree_a": ProxyRecord("tree_a", years, latent, archive="Wood"),
+            "tree_b": ProxyRecord("tree_b", years, latent + 0.1 * np.cos(years), archive="Wood"),
+            "native": ProxyRecord("native", years[::3], np.ones(30), archive="Speleothem"),
+        }
+        models, audit = fit_resolution_subnests(
+            pd.DataFrame({pid: records[pid].value for pid in ("tree_a", "tree_b")}, index=years),
+            records,
+            ["native"],
+            pd.Series(latent, index=years),
+            years,
+            1900, 1989,
+            PCAConfig(selection="fixed", n_components=1, max_components=1),
+            ReconstructionConfig(auto_tune=False, n_bootstrap=0),
+        )
+        self.assertEqual(models, [])
+        self.assertEqual(audit.iloc[0]["reason"], "no_native_proxy_in_fitted_pca")
+
+    def test_explicit_nest_end_to_end_records_resolution_subnest(self):
+        years = np.arange(1900, 2000)
+        latent = np.sin((years - 1900) / 8.0)
+        three_years = years[1::3]
+        records = ProxyCollection([
+            ProxyRecord("tree_a", years, latent, archive="Wood"),
+            ProxyRecord(
+                "tree_b", years, latent + 0.04 * np.cos(years), archive="Wood"
+            ),
+            ProxyRecord(
+                "stalagmite",
+                three_years,
+                pd.Series(latent, index=years).reindex(three_years).to_numpy(),
+                archive="Speleothem",
+            ),
+        ])
+        screening = pd.DataFrame({
+            "pid": list(records),
+            "selected": [True, True, True],
+            "best_months": ["1,2,3,4,5,6,7,8,9,10,11,12"] * 3,
+        })
+        result = reconstruct(
+            records,
+            screening,
+            pd.Series(latent, index=years, name="target"),
+            ScreeningConfig(),
+            PCAConfig(
+                selection="fixed", n_components=1, max_components=1,
+                min_proxies_per_year=2,
+            ),
+            ReconstructionConfig(
+                method="explicit_nest",
+                auto_tune=True,
+                regression="ridge",
+                ridge_alphas=(0.1,),
+                n_bootstrap=2,
+                minimum_bootstrap_success_fraction=0.5,
+                full_network_outer_validation=False,
+                rescreen_outer_folds=False,
+                nest=ExplicitNestConfig(
+                    minimum_subnest_calibration_windows=8,
+                    require_internal_ce_re=False,
+                ),
+            ),
+        )
+        rows = result.nest_summary
+        self.assertTrue((rows["row_type"] == "coverage_nest").any())
+        resolution = rows.loc[rows["row_type"] == "resolution_subnest"]
+        self.assertTrue((resolution["resolution_years"] == 3).any())
+        self.assertTrue(bool(resolution.loc[
+            resolution["resolution_years"] == 3, "accepted"
+        ].iloc[0]))
+        self.assertIn("resolution_subnest", set(result.model_selection["nest_layer"]))
+        self.assertEqual(result.reconstruction["Year"].diff().dropna().unique().tolist(), [1])
+        self.assertGreater(int(result.reconstruction["ensemble_n"].max()), 0)
+
+    def test_explicit_mixed_resolution_directed_holdouts_and_common_reference(self):
+        years = np.arange(1900, 2001)
+        latent = np.sin((years - 1900) / 7.0)
+        records = {
+            "tree_a": ProxyRecord("tree_a", years, latent, archive="Wood"),
+            "tree_b": ProxyRecord("tree_b", years, latent + 0.02 * np.cos(years), archive="Wood"),
+            "native": ProxyRecord("native", years[::3], latent[::3], archive="Speleothem"),
+        }
+        screening = pd.DataFrame({"pid": list(records), "selected": True})
+        config = ReconstructionConfig(
+            standardization_period=(1950, 2000), n_bootstrap=0,
+            ridge_alphas=(0.1,), validation_block_years=20,
+            nest=ExplicitNestConfig(require_internal_ce_re=False),
+        )
+        for rescreen in (False, True):
+            table = explicit_nest_validation(
+                records, screening, pd.Series(latent, index=years),
+                ScreeningConfig(min_overlap=8),
+                PCAConfig(selection="fixed", n_components=1, max_components=1, min_pairwise_overlap=4),
+                config, rescreen=rescreen,
+            )
+            self.assertEqual(len(table), 2)
+            self.assertEqual(set(table["fit_status"]), {"completed"})
+            self.assertEqual(set(table["validation_start"]), {1900, 1967})
+            self.assertEqual(set(table["validation_end"]), {1933, 2000})
+            self.assertTrue((table["r"] > 0.8).all())
+            self.assertEqual(set(table["assessment_metric"]), {"correlation"})
+            self.assertEqual(set(table["validation_role"]), {"sensitivity_only"})
+
+    def test_unavailable_explicit_holdouts_are_reported(self):
+        years = np.arange(1900, 2001)
+        table = explicit_nest_validation(
+            {}, pd.DataFrame(columns=["pid", "selected"]),
+            pd.Series(np.sin(years), index=years),
+            ScreeningConfig(), PCAConfig(), ReconstructionConfig(n_bootstrap=0),
+            rescreen=False,
+        )
+        self.assertEqual(len(table), 2)
+        self.assertEqual(set(table["fit_status"]), {"unavailable"})
+        self.assertTrue(table["r"].isna().all())
+        self.assertTrue(table["fit_error"].notna().all())
 
     def test_unsupported_interpolation_request_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "interpolation must be"):
@@ -1094,6 +1369,7 @@ class ModelTests(unittest.TestCase):
             min_proxies_per_year=1,
         )
         reconstruction_config = ReconstructionConfig(
+            method="native_missing",
             calibration_period=(1900, 1959),
             reconstruction_period=(1880, 1979),
             regression="ridge",

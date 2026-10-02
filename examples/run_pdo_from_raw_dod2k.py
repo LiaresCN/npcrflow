@@ -4,6 +4,7 @@ from pathlib import Path
 
 from npcrflow import (
     AmplitudeCalibrationConfig,
+    ExplicitNestConfig,
     MultiresolutionConfig,
     OutputConfig,
     PCAConfig,
@@ -86,6 +87,7 @@ def build_config(
             score_ridge=0.10,
         ),
         reconstruction=ReconstructionConfig(
+            method="explicit_nest",
             calibration_period=(1900, 2000),
             reconstruction_period=(0, None),
             interpolation="archive_linear",
@@ -94,6 +96,9 @@ def build_config(
             interpolation_max_resolution_years=2.0,
             retain_longest_annual_segment=True,
             detrend_proxies=False,
+            # None standardizes within each training/calibration fold.  Use,
+            # e.g., (1950, 2000) for a declared common-period sensitivity.
+            standardization_period=None,
             regression="ridge",
             ridge_alphas=(0.0, 0.01, 0.1, 1.0, 10.0, 100.0),
             pls_components=2,
@@ -105,6 +110,7 @@ def build_config(
             # Internal NPCR model selection uses blocked CE/RE. External
             # robustness uses only the two directed 2/3-to-1/3 edge splits.
             validation_block_years=34,
+            minimum_internal_train_samples=20,
             n_bootstrap=50,
             bootstrap_block_years=5,
             minimum_bootstrap_success_fraction=0.80,
@@ -116,6 +122,22 @@ def build_config(
             min_re=0.0,
             skill_floor=0.0,
             auto_tune=True,
+            nest=ExplicitNestConfig(
+                minimum_span_years=50,
+                minimum_start_year=100,
+                minimum_total_proxies=2,
+                minimum_core_proxies=2,
+                minimum_calibration_years=20,
+                combination="median",
+                require_internal_ce_re=True,
+                multiresolution_subnests=True,
+                direct_annual_resolution_years=1.5,
+                subnest_max_resolution_years=10.0,
+                subnest_resolution_bins=(2, 3, 5, 10),
+                minimum_subnest_calibration_windows=8,
+                subnest_constraint_weight=1.0,
+                subnest_smoothness_multiplier=1.0,
+            ),
             amplitude=AmplitudeCalibrationConfig(
                 method=amplitude_method,
                 variance_reference=amplitude_variance_reference,
@@ -144,9 +166,9 @@ def build_config(
             multiresolution=MultiresolutionConfig(
                 enabled=multiresolution_enabled,
                 state_timestep_years=1,
-                # Native records up to and including 10-year resolution enter
-                # pairwise PCR at native years; only declared short Wood/Coral
-                # gaps may be filled by the reconstruction policy above.
+                # Optional fallback for records coarser than the 10-year
+                # resolution-sub-NEST limit.
+                direct_pcr_max_resolution_years=1.5,
                 regression_max_resolution_years=10.0,
                 lowpass_period_years=10.0,
                 smoothness_multiplier=1.0,
@@ -156,7 +178,7 @@ def build_config(
                 proxy_constraint_weight_candidates=(
                     0.0, 0.1, 0.3, 1.0, 3.0, 10.0, 30.0
                 ),
-                lowpass_period_candidates=(10.0, 20.0),
+                lowpass_period_candidates=(3.0, 5.0, 10.0, 20.0),
                 selection_lowpass_period_years=10.0,
                 minimum_tuning_folds=2,
                 minimum_calibration_overlap=8,

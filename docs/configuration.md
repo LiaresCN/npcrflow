@@ -15,6 +15,9 @@ The same fields are available through the typed Python configuration classes.
   seasons, overlap requirements for annual and low-resolution records,
   effective-DOF p and absolute-r thresholds, within-record Holm correction,
   optional cross-record correction, and optional archive caps.
+- `screening.detrend` optionally removes a linear trend from both the proxy and
+  target only for their screening correlation. It does not alter the values
+  later passed into PCA/PCR.
 
 ## PCR and regression
 
@@ -47,6 +50,16 @@ The same fields are available through the typed Python configuration classes.
   availability table to the longest consecutive interval with finite annual
   estimates. This controls the final product, not the temporal support of the
   input proxies.
+- `reconstruction.detrend_proxies` controls linear detrending before NEST PCA;
+  it is independent of screening detrending. No temporal proxy filter is
+  applied implicitly.
+- Every NEST estimates its PCA mean and standard deviation again from its own
+  training years. `reconstruction.standardization_period=(1950, 2000)` adds the
+  former WNPSM common-reference z-score once, in memory, before NEST fitting;
+  `None` skips this otherwise redundant preprocessing transform. In every
+  external validation fit the common reference is intersected with that fit's
+  calibration years. Native-resolution proxies use their actually observed
+  values in the same reference period and are not interpolated.
 - `reconstruction.regression`: `auto`, `ols`, `ridge`, `pls`, `elasticnet`, or
   `random_forest`. With `auto`, `regression_candidates` defaults to Ridge, PLS,
   and ElasticNet, and the family is selected only with inner contiguous blocks
@@ -58,9 +71,10 @@ The same fields are available through the typed Python configuration classes.
   `auto_tune` control inner blocked selection. Outer fold scores and spectral
   diagnostics are never reused for this choice. The selected concrete family
   is reported in each validation row and remains fixed during bootstrap and
-  low-frequency-weight tuning. A candidate passes `skill_floor` only when
-  every available inner fold reaches that CE/RE floor; if no candidate passes,
-  the complete table is retained and the fallback is explicit.
+  low-frequency-weight tuning. A candidate passes the configured internal
+  thresholds when its median inner-fold CE and RE meet `min_ce` and `min_re`;
+  the complete selection table reports candidates that did not pass. Each
+  explicit NEST applies this decision independently.
 - `n_bootstrap`, `bootstrap_block_years`, and
   `minimum_bootstrap_success_fraction` control moving-block uncertainty. A run
   fails loudly if too few members fit instead of silently reporting a
@@ -91,8 +105,8 @@ The same fields are available through the typed Python configuration classes.
 
 For `variance`, `variance_reference` is either `observation` or
 `max_proxy_nest`. The latter uses the densest proxy-availability tier with at
-least `minimum_overlap` calibration years and does not construct or save NEST
-files. `minimum_overlap` and positive `slope_bounds` are explicit safeguards.
+least `minimum_overlap` calibration years and does not write an additional
+NEST file. `minimum_overlap` and positive `slope_bounds` are explicit safeguards.
 The mapping is refitted inside every fold. Results retain raw and calibrated
 predictions, coefficients, reference type and support, standard-deviation
 ratio, and variance ratio.
@@ -109,17 +123,43 @@ Their combined group influence is divided across members. All weights are
 recomputed without the held-out climate target and written to
 `proxy_weights.csv`; no proxy value is altered or filled.
 
-## Multiple resolutions and low frequency
+## Explicit NESTs, multiple resolutions, and low frequency
 
-`reconstruction.multiresolution` contains every assumption of this layer:
+`reconstruction.method="explicit_nest"` is the primary workflow. It builds
+coverage-defined NESTs in memory, fits PCA/PCR separately in every NEST,
+applies internal CE/RE there, and combines accepted NEST predictions.
+`method="native_missing"` is the former unified-matrix sensitivity.
 
-- `enabled`: reserve low-resolution records for native-window assimilation;
+`reconstruction.nest` controls the primary structure:
+
+- `minimum_span_years`, `minimum_total_proxies`, and
+  `minimum_calibration_years` define eligible coverage NESTs;
+- `combination` selects the median of overlapping accepted NESTs or the
+  densest available NEST;
+- `require_internal_ce_re` applies `min_ce` and `min_re` during each NEST's
+  model construction, not during supplementary external validation;
+- `direct_annual_resolution_years` defines the annual PCA/PCR layer;
+- `multiresolution_subnests=True` allows coarser records to participate in
+  their own native-window PCA, calibration, and regression;
+- `subnest_resolution_bins=(2, 3, 5, 10)` and
+  `subnest_max_resolution_years=10` declare the window layers. Annual proxies
+  and observations are aggregated onto the same windows as the native proxy;
+  the native proxy is never interpolated;
+- `minimum_subnest_calibration_windows` prevents a sparse resolution layer
+  from being fitted without enough observed target windows;
+- `subnest_constraint_weight` and `subnest_smoothness_multiplier` control how
+  accepted window predictions constrain the annual state. They do not turn a
+  three-year observation into annual data.
+
+`reconstruction.multiresolution` controls the optional fallback for records
+coarser than the resolution-sub-NEST limit:
+
+- `enabled`: allow very low-resolution native-window assimilation;
 - `state_timestep_years`: currently fixed explicitly to one year;
-- `regression_max_resolution_years`: records at or below this resolution enter
-  pairwise PCR at their original observed years; slower records enter the
-  native-window low-frequency layer. The default `10.0` therefore allows a
-  three-year stalagmite record to participate in linear regression without
-  filling either of its two intervening years;
+- `direct_pcr_max_resolution_years` and the backward-compatible
+  `regression_max_resolution_years` route records in the unified
+  `native_missing` sensitivity; explicit NEST routing is controlled by the
+  `nest` fields above;
 - `lowpass_period_years`: frequency boundary of the component allowed to move;
 - `smoothness_multiplier`: strength of the second-difference penalty;
 - `core_anchor_weight` and `proxy_constraint_weight`: relative data terms. The
@@ -146,9 +186,12 @@ The output state is annual, but the information is not uniformly annual.
 `proxy_availability.csv` labels each year `annual_core`, `low_frequency_only`,
 or `unconstrained`. A low-resolution-only annual value is a smooth latent-state
 estimate, not recovered year-to-year variability.
-`low_frequency_observations.csv` lists the exact native samples and annual
-support windows used, replacing opaque saved NEST workbooks with a compact
-observation-operator audit.
+`nest_summary.csv` lists coverage NESTs and their resolution sub-NESTs,
+including native-window and predicted-window counts. Very-low-resolution
+constraint summaries are retained when that optional layer is active. Detailed
+per-window matrices and predictions stay in memory and are not written once
+per overlapping NEST. These compact audits replace the opaque saved Excel
+workbooks.
 
 ## Validation, sensitivities, and output
 

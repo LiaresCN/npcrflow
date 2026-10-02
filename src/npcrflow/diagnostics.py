@@ -94,12 +94,21 @@ def primary_reconstruction_summary(
     selected = model_selection.copy()
     if not selected.empty and "selected" in selected:
         selected = selected.loc[selected["selected"].astype(bool)]
-    internal = None
     if not selected.empty and "selection_stage" in selected:
         amplitude = selected.loc[selected["selection_stage"] == "amplitude"]
-        internal = amplitude.iloc[-1] if not amplitude.empty else selected.iloc[-1]
-    elif not selected.empty:
-        internal = selected.iloc[-1]
+        internal_rows = amplitude if not amplitude.empty else selected
+    else:
+        internal_rows = selected
+    median_ce = pd.to_numeric(
+        internal_rows.get("median_ce", pd.Series(dtype=float)), errors="coerce"
+    )
+    median_re = pd.to_numeric(
+        internal_rows.get("median_re", pd.Series(dtype=float)), errors="coerce"
+    )
+    passed = internal_rows.get(
+        "passes_internal_ce_re",
+        internal_rows.get("passes_skill_floor", pd.Series(dtype=bool)),
+    )
     return pd.DataFrame(
         [{
             "evaluation": "primary_reconstruction_evidence",
@@ -108,28 +117,16 @@ def primary_reconstruction_summary(
             "main_p_effective": float(apparent.get("p_effective", np.nan)),
             "main_n_eff": float(apparent.get("n_eff", np.nan)),
             "main_sd_ratio": float(apparent.get("sd_ratio", np.nan)),
-            "internal_median_ce": (
-                float(internal.get("median_ce", np.nan)) if internal is not None else np.nan
-            ),
-            "internal_median_re": (
-                float(internal.get("median_re", np.nan)) if internal is not None else np.nan
-            ),
-            "internal_ce_threshold": (
-                float(internal.get("internal_ce_threshold", np.nan))
-                if internal is not None else config.min_ce
-            ),
-            "internal_re_threshold": (
-                float(internal.get("internal_re_threshold", np.nan))
-                if internal is not None else config.min_re
-            ),
+            "internal_nest_count": int(len(internal_rows)),
+            "internal_median_ce": float(median_ce.median()) if median_ce.notna().any() else np.nan,
+            "internal_minimum_ce": float(median_ce.min()) if median_ce.notna().any() else np.nan,
+            "internal_median_re": float(median_re.median()) if median_re.notna().any() else np.nan,
+            "internal_minimum_re": float(median_re.min()) if median_re.notna().any() else np.nan,
+            "internal_ce_threshold": config.min_ce,
+            "internal_re_threshold": config.min_re,
             "internal_npcr_threshold_passed": (
-                bool(
-                    internal.get(
-                        "passes_internal_ce_re",
-                        internal.get("passes_skill_floor", False),
-                    )
-                )
-                if internal is not None else pd.NA
+                bool(pd.Series(passed).astype(bool).all())
+                if len(internal_rows) else pd.NA
             ),
             "external_sensitivities_decide_main_result": False,
         }]

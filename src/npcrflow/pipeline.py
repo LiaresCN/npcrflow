@@ -244,6 +244,9 @@ def save_pipeline_result(
         ).to_csv(paths["primary_summary"], index=False)
         paths["model_selection"] = output / "model_selection.csv"
         result.reconstruction.model_selection.to_csv(paths["model_selection"], index=False)
+        if not result.reconstruction.nest_summary.empty:
+            paths["nest_summary"] = output / "nest_summary.csv"
+            result.reconstruction.nest_summary.to_csv(paths["nest_summary"], index=False)
         paths["proxy_weights"] = output / "proxy_weights.csv"
         result.reconstruction.proxy_weights.to_csv(paths["proxy_weights"], index=False)
         paths["availability"] = output / "proxy_availability.csv"
@@ -301,6 +304,17 @@ def save_pipeline_result(
         result.reconstruction.reconstruction["Year"], errors="coerce"
     ).dropna()
     interpolation_audit = result.reconstruction.interpolation_audit
+    nest_summary = result.reconstruction.nest_summary
+    coverage_nests = (
+        nest_summary.loc[nest_summary["row_type"] == "coverage_nest"]
+        if "row_type" in nest_summary
+        else nest_summary
+    )
+    resolution_nests = (
+        nest_summary.loc[nest_summary["row_type"] == "resolution_subnest"]
+        if "row_type" in nest_summary
+        else pd.DataFrame()
+    )
     manifest = {
         "created_utc": datetime.now(timezone.utc).isoformat(),
         "package": "npcrflow",
@@ -315,6 +329,15 @@ def save_pipeline_result(
         "loaded_proxy_count_after_deduplication": len(result.source_qc),
         "metadata_filter_proxy_count": int(result.source_qc["included"].sum()),
         "selected_proxy_count": int(result.screening["selected"].sum()),
+        "reconstruction_method": config.reconstruction.method,
+        "candidate_nest_count": int(len(coverage_nests)),
+        "accepted_nest_count": int(
+            coverage_nests.get("accepted", pd.Series(dtype=bool)).sum()
+        ),
+        "candidate_resolution_subnest_count": int(len(resolution_nests)),
+        "accepted_resolution_subnest_count": int(
+            resolution_nests.get("accepted", pd.Series(dtype=bool)).sum()
+        ),
         "model_proxy_count": len(result.reconstruction.model.columns),
         "annual_output_start": int(reconstruction_years.min()),
         "annual_output_end": int(reconstruction_years.max()),
@@ -397,9 +420,26 @@ def run_pipeline(
     )
     screening["reconstruction_role"] = "not_selected"
     screening.loc[screening["pid"].isin(core_pids), "reconstruction_role"] = "pcr_native"
+    resolution_subnest_pids = [
+        pid for pid in low_frequency_pids
+        if np.isfinite(records[pid].resolution)
+        and records[pid].resolution
+        <= config.reconstruction.nest.subnest_max_resolution_years
+        and config.reconstruction.method == "explicit_nest"
+    ]
     screening.loc[
-        screening["pid"].isin(low_frequency_pids), "reconstruction_role"
-    ] = "lowpass_native_window"
+        screening["pid"].isin(resolution_subnest_pids), "reconstruction_role"
+    ] = "resolution_subnest_pca_native_window"
+    screening.loc[
+        screening["pid"].isin(
+            [pid for pid in low_frequency_pids if pid not in resolution_subnest_pids]
+        ),
+        "reconstruction_role",
+    ] = (
+        "lowpass_native_window"
+        if config.reconstruction.multiresolution.enabled
+        else "excluded_above_subnest_resolution"
+    )
     reconstruction = reconstruct(
         records,
         screening,

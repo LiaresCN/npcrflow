@@ -224,17 +224,22 @@ class ProxyWeightConfig:
 
 @dataclass(frozen=True)
 class MultiresolutionConfig:
-    """Native-support low-frequency assimilation into an annual latent state.
+    """Optional very-low-resolution assimilation into an annual latent state.
 
-    Low-resolution observations are never interpolated. They constrain only
-    window means of the low-pass component; the PCR high-frequency component
-    is carried through unchanged. The current state grid is explicitly annual.
+    In the primary explicit-NEST method, 2–10-year records are handled first by
+    ``ExplicitNestConfig`` resolution sub-NESTs. This configuration is the
+    fallback for still coarser evidence and also retains routing fields for the
+    unified ``native_missing`` sensitivity. Observations are never
+    interpolated. They constrain only window means of the low-pass component;
+    the PCR high-frequency component is carried through unchanged. The current
+    state grid is explicitly annual.
     An optional increment cap uses the larger low-frequency scale from the core
     and the current calibration-only target, never a held-out observation.
     """
 
     enabled: bool = False
     state_timestep_years: int = 1
+    direct_pcr_max_resolution_years: float = 1.5
     regression_max_resolution_years: float = 10.0
     lowpass_period_years: float = 10.0
     smoothness_multiplier: float = 1.0
@@ -244,7 +249,7 @@ class MultiresolutionConfig:
     proxy_constraint_weight_candidates: tuple[float, ...] = (
         0.0, 0.1, 0.3, 1.0, 3.0, 10.0, 30.0
     )
-    lowpass_period_candidates: tuple[float, ...] = (10.0, 20.0)
+    lowpass_period_candidates: tuple[float, ...] = (3.0, 5.0, 10.0, 20.0)
     selection_lowpass_period_years: float = 10.0
     minimum_tuning_folds: int = 2
     minimum_calibration_overlap: int = 8
@@ -255,8 +260,15 @@ class MultiresolutionConfig:
     def __post_init__(self) -> None:
         if self.state_timestep_years != 1:
             raise ValueError("the current latent reconstruction grid must be annual")
+        if self.direct_pcr_max_resolution_years <= 0:
+            raise ValueError("direct_pcr_max_resolution_years must be positive")
         if self.regression_max_resolution_years <= 0:
             raise ValueError("regression_max_resolution_years must be positive")
+        if self.direct_pcr_max_resolution_years > self.regression_max_resolution_years:
+            raise ValueError(
+                "direct_pcr_max_resolution_years cannot exceed "
+                "regression_max_resolution_years"
+            )
         if self.lowpass_period_years <= 2:
             raise ValueError("lowpass_period_years must exceed the 2-year Nyquist period")
         if self.smoothness_multiplier < 0:
@@ -284,6 +296,63 @@ class MultiresolutionConfig:
 
 
 @dataclass(frozen=True)
+class ExplicitNestConfig:
+    """Coverage NEST and native-window resolution-sub-NEST settings.
+
+    Coverage defines membership, not a requirement for complete annual
+    sampling. Near-annual records form the annual PCA/PCR layer. Coarser
+    records up to ``subnest_max_resolution_years`` join independent window-
+    scale PCA/PCR layers with annual predictors aggregated to the same windows.
+    """
+
+    minimum_span_years: int = 50
+    minimum_start_year: int = 100
+    minimum_total_proxies: int = 2
+    minimum_core_proxies: int = 2
+    minimum_calibration_years: int = 20
+    combination: Literal["median", "densest"] = "median"
+    require_internal_ce_re: bool = True
+    multiresolution_subnests: bool = True
+    direct_annual_resolution_years: float = 1.5
+    subnest_max_resolution_years: float = 10.0
+    subnest_resolution_bins: tuple[int, ...] = (2, 3, 5, 10)
+    minimum_subnest_calibration_windows: int = 8
+    subnest_constraint_weight: float = 1.0
+    subnest_smoothness_multiplier: float = 1.0
+
+    def __post_init__(self) -> None:
+        if self.minimum_span_years < 2:
+            raise ValueError("minimum_span_years must be at least 2")
+        if self.minimum_total_proxies < 1:
+            raise ValueError("minimum_total_proxies must be positive")
+        if self.minimum_core_proxies < 1:
+            raise ValueError("minimum_core_proxies must be positive")
+        if self.minimum_calibration_years < 4:
+            raise ValueError("minimum_calibration_years must be at least 4")
+        if self.direct_annual_resolution_years <= 0:
+            raise ValueError("direct_annual_resolution_years must be positive")
+        if self.subnest_max_resolution_years <= self.direct_annual_resolution_years:
+            raise ValueError(
+                "subnest_max_resolution_years must exceed direct annual resolution"
+            )
+        if not self.subnest_resolution_bins or any(
+            value <= self.direct_annual_resolution_years
+            for value in self.subnest_resolution_bins
+        ):
+            raise ValueError("subnest resolution bins must exceed annual resolution")
+        if tuple(sorted(set(self.subnest_resolution_bins))) != self.subnest_resolution_bins:
+            raise ValueError("subnest resolution bins must be unique and increasing")
+        if self.subnest_resolution_bins[-1] > self.subnest_max_resolution_years:
+            raise ValueError("subnest resolution bins exceed subnest maximum")
+        if self.minimum_subnest_calibration_windows < 4:
+            raise ValueError("minimum_subnest_calibration_windows must be at least 4")
+        if self.subnest_constraint_weight < 0:
+            raise ValueError("subnest_constraint_weight cannot be negative")
+        if self.subnest_smoothness_multiplier < 0:
+            raise ValueError("subnest_smoothness_multiplier cannot be negative")
+
+
+@dataclass(frozen=True)
 class ReconstructionConfig:
     """Reconstruction and validation settings.
 
@@ -300,12 +369,17 @@ class ReconstructionConfig:
 
     calibration_period: tuple[int, int] | None = None
     reconstruction_period: tuple[int | None, int | None] | None = None
+    method: Literal["explicit_nest", "native_missing"] = "explicit_nest"
     interpolation: Literal["none", "archive_linear"] = "archive_linear"
     interpolation_archives: tuple[str, ...] = ("Wood", "Coral")
     interpolation_max_gap_years: int = 2
     interpolation_max_resolution_years: float = 2.0
     retain_longest_annual_segment: bool = True
     detrend_proxies: bool = False
+    # Optional legacy common-reference z-score applied once, in memory, before
+    # coverage NEST fitting. Each NEST PCA still standardizes its own training
+    # matrix independently.
+    standardization_period: tuple[int, int] | None = None
     regression: Literal[
         "auto", "ols", "ridge", "pls", "elasticnet", "random_forest"
     ] = "ridge"
@@ -318,6 +392,7 @@ class ReconstructionConfig:
     evaluation_lowpass_periods: tuple[float, ...] = (10.0, 20.0)
     evaluation_period_bands: tuple[tuple[float, float], ...] = ((10.0, 30.0),)
     validation_block_years: int = 20
+    minimum_internal_train_samples: int = 20
     n_bootstrap: int = 200
     bootstrap_block_years: int = 5
     minimum_bootstrap_success_fraction: float = 0.80
@@ -335,6 +410,7 @@ class ReconstructionConfig:
     amplitude: AmplitudeCalibrationConfig = field(default_factory=AmplitudeCalibrationConfig)
     proxy_weights: ProxyWeightConfig = field(default_factory=ProxyWeightConfig)
     multiresolution: MultiresolutionConfig = field(default_factory=MultiresolutionConfig)
+    nest: ExplicitNestConfig = field(default_factory=ExplicitNestConfig)
 
     def __post_init__(self) -> None:
         if self.interpolation not in {"none", "archive_linear"}:
@@ -350,12 +426,19 @@ class ReconstructionConfig:
             raise ValueError("interpolation_max_resolution_years must be positive")
         if self.calibration_period is not None and self.calibration_period[0] > self.calibration_period[1]:
             raise ValueError("calibration period must be increasing")
+        if (
+            self.standardization_period is not None
+            and self.standardization_period[0] > self.standardization_period[1]
+        ):
+            raise ValueError("standardization period must be increasing")
         if self.reconstruction_period is not None:
             start, end = self.reconstruction_period
             if start is not None and end is not None and start > end:
                 raise ValueError("reconstruction period must be increasing")
         if self.validation_block_years < 2:
             raise ValueError("validation_block_years must be at least 2")
+        if self.minimum_internal_train_samples < 4:
+            raise ValueError("minimum_internal_train_samples must be at least 4")
         if not 0 < self.external_validation_fraction < 0.5:
             raise ValueError("external_validation_fraction must be between 0 and 0.5")
         if self.n_bootstrap < 0:

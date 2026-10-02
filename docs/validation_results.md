@@ -24,6 +24,43 @@ main evidence is defined in the update above.
 
 ## PDO
 
+### Version 0.6.0 explicit-NEST verification (in progress)
+
+The annual-only ablation uses the same unfiltered PDO, d18O scope, screening
+and calibration period as the primary mixed-resolution run, with native
+resolution restricted to at most 1.5 years. Its 56 proxies form 268 unique
+coverage NESTs, all accepted by the declared internal median CE/RE thresholds.
+In 1900–2000 the apparent observation correlation is `r=0.753323`, SD ratio
+`0.621563`, and RMSE `0.621631`. Across accepted NESTs, internal median CE is
+`0.396914` and RE is `0.444483`. The saved annual interval is 552–2011,
+containing 1,460 consecutive finite values. Total compact outputs are about
+5.4 MB; no predictor matrices, NEST workbooks, or bootstrap members are saved.
+This run disables bootstrap and external sensitivities to isolate the NEST
+and resolution comparison. Mixed-resolution PDO results are pending and must
+not be inferred from this ablation or historical v0.5 scores.
+
+The independent controlled check in
+`examples/run_synthetic_resolution_nests.py` pairs ten annual tree proxies
+with one 3-, 5-, or 10-year native stalagmite. Trees contain the annual
+component but no injected slow component. Only the first 100 target years
+are supplied to calibration or tuning; the last 100 years are held out.
+The proxy network is predeclared, so this isolates NEST fitting and fusion
+after screening rather than testing the screening procedure. Three seeds
+give the following held-out medians:
+
+| Network | Annual r | SD ratio | 10-year low-pass r | Low-pass SD ratio |
+| --- | ---: | ---: | ---: | ---: |
+| Ten annual trees | 0.6596 | 0.6895 | 0.0790 | 0.1251 |
+| + one 3-year stalagmite | 0.7340 | 0.6930 | 0.6703 | 0.1654 |
+| + one 5-year stalagmite | 0.7037 | 0.6764 | 0.4786 | 0.1362 |
+| + one 10-year stalagmite | 0.6590 | 0.6742 | 0.0752 | 0.1254 |
+
+This demonstrates that a native-resolution sub-NEST can improve held-out slow
+covariation while its proxy remains sparse. Amplitude remains damped, and the
+10-year case does not improve with only about ten calibration samples. It is
+method-capability evidence under a known chronology and proxy system, not a
+claim of equivalent skill for a real stalagmite or PDO network.
+
 ### Version 0.5.0 longest continuous annual output
 
 With bounded Wood/Coral interpolation enabled (maximum two-year interior gap,

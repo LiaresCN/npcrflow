@@ -57,6 +57,10 @@ def main() -> None:
             interpolation_max_gap_years=2,
             interpolation_max_resolution_years=2.0,
             retain_longest_annual_segment=True,
+            # Retain the legacy WNPSM common-reference preprocessing in
+            # memory; every NEST still performs its own PCA standardization.
+            standardization_period=(1950, 2000),
+            detrend_proxies=True,
             regression="ridge",
             validation_block_years=15,
             n_bootstrap=50,

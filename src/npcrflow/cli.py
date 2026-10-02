@@ -9,6 +9,7 @@ from typing import Any
 
 from .config import (
     AmplitudeCalibrationConfig,
+    ExplicitNestConfig,
     ProxyWeightConfig,
     MultiresolutionConfig,
     OutputConfig,
@@ -47,6 +48,9 @@ def load_config(path: str | Path) -> PipelineConfig:
     )
     reconstruction["multiresolution"] = MultiresolutionConfig(
         **dict(reconstruction.get("multiresolution", {}))
+    )
+    reconstruction["nest"] = ExplicitNestConfig(
+        **dict(reconstruction.get("nest", {}))
     )
     return PipelineConfig(
         proxy_filter=ProxyFilterConfig(**raw.get("proxy_filter", {})),
